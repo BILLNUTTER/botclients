@@ -3,13 +3,21 @@ info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: Nutterx Connect Client Portal API
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: auth
+    description: Current authenticated user
+  - name: admin
+    description: Administrator operations
+  - name: client
+    description: Client portal operations
+  - name: public
+    description: Public shareable announcements
 paths:
   /healthz:
     get:
@@ -24,7 +32,395 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /auth/me:
+    get:
+      operationId: getCurrentUser
+      tags: [auth]
+      summary: Get the current portal user
+      responses:
+        "200":
+          description: Current user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CurrentUser"
+        "401":
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /admin/summary:
+    get:
+      operationId: getAdminSummary
+      tags: [admin]
+      summary: Get dashboard metrics and attention items
+      responses:
+        "200":
+          description: Dashboard summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminSummary"
+  /admin/clients:
+    get:
+      operationId: listAdminClients
+      tags: [admin]
+      summary: List clients with search and status filters
+      parameters:
+        - $ref: "#/components/parameters/Search"
+        - $ref: "#/components/parameters/Status"
+        - $ref: "#/components/parameters/ServiceTypeId"
+      responses:
+        "200":
+          description: Client list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Client"
+    post:
+      operationId: createAdminClient
+      tags: [admin]
+      summary: Register a client
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ClientInput"
+      responses:
+        "201":
+          description: Client created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Client"
+  /admin/clients/{id}:
+    get:
+      operationId: getAdminClient
+      tags: [admin]
+      summary: Get a client and their services
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: Client detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClientDetail"
+    patch:
+      operationId: updateAdminClient
+      tags: [admin]
+      summary: Update client information
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ClientUpdate"
+      responses:
+        "200":
+          description: Updated client
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Client"
+    delete:
+      operationId: deleteAdminClient
+      tags: [admin]
+      summary: Remove a client
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "204":
+          description: Client deleted
+  /admin/services:
+    get:
+      operationId: listAdminServices
+      tags: [admin]
+      summary: List services across clients
+      parameters:
+        - $ref: "#/components/parameters/Status"
+        - $ref: "#/components/parameters/ServiceTypeId"
+      responses:
+        "200":
+          description: Service list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Service"
+    post:
+      operationId: createAdminService
+      tags: [admin]
+      summary: Add a service to a client
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ServiceInput"
+      responses:
+        "201":
+          description: Service created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Service"
+  /admin/services/{id}:
+    patch:
+      operationId: updateAdminService
+      tags: [admin]
+      summary: Update a service
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ServiceUpdate"
+      responses:
+        "200":
+          description: Updated service
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Service"
+    delete:
+      operationId: deleteAdminService
+      tags: [admin]
+      summary: Delete a service
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "204":
+          description: Service deleted
+  /admin/service-types:
+    get:
+      operationId: listServiceTypes
+      tags: [admin]
+      summary: List service types
+      responses:
+        "200":
+          description: Service types
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ServiceType"
+    post:
+      operationId: createServiceType
+      tags: [admin]
+      summary: Create a service type
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ServiceTypeInput"
+      responses:
+        "201":
+          description: Service type created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServiceType"
+  /admin/service-types/{id}:
+    patch:
+      operationId: updateServiceType
+      tags: [admin]
+      summary: Update a service type
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ServiceTypeUpdate"
+      responses:
+        "200":
+          description: Updated service type
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServiceType"
+    delete:
+      operationId: deleteServiceType
+      tags: [admin]
+      summary: Deactivate a service type
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "204":
+          description: Service type deactivated
+  /admin/updates:
+    get:
+      operationId: listAdminUpdates
+      tags: [admin]
+      summary: List announcements
+      responses:
+        "200":
+          description: Announcements
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Update"
+    post:
+      operationId: createAdminUpdate
+      tags: [admin]
+      summary: Create an announcement
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateInput"
+      responses:
+        "201":
+          description: Announcement created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Update"
+  /admin/updates/{id}:
+    patch:
+      operationId: updateAdminUpdate
+      tags: [admin]
+      summary: Edit an announcement
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateUpdate"
+      responses:
+        "200":
+          description: Updated announcement
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Update"
+    delete:
+      operationId: deleteAdminUpdate
+      tags: [admin]
+      summary: Delete an announcement
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "204":
+          description: Announcement deleted
+  /updates/{slug}:
+    get:
+      operationId: getPublicUpdate
+      tags: [public]
+      summary: Read a shareable announcement
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Published public announcement
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Update"
+  /client/services:
+    get:
+      operationId: listClientServices
+      tags: [client]
+      summary: List the current client's services
+      responses:
+        "200":
+          description: Client services
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Service"
+  /client/updates:
+    get:
+      operationId: listClientUpdates
+      tags: [client]
+      summary: List updates visible to the current client
+      responses:
+        "200":
+          description: Client updates
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Update"
+  /client/profile:
+    get:
+      operationId: getClientProfile
+      tags: [client]
+      summary: Get the current client's profile
+      responses:
+        "200":
+          description: Client profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Client"
+    patch:
+      operationId: updateClientProfile
+      tags: [client]
+      summary: Update the current client's contact details
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProfileUpdate"
+      responses:
+        "200":
+          description: Updated profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Client"
 components:
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    Search:
+      name: search
+      in: query
+      schema:
+        type: string
+    Status:
+      name: status
+      in: query
+      schema:
+        type: string
+        enum: [active, expiring_soon, expired, inactive]
+    ServiceTypeId:
+      name: serviceTypeId
+      in: query
+      schema:
+        type: string
   schemas:
     HealthStatus:
       type: object
@@ -33,4 +429,206 @@ components:
           type: string
       required:
         - status
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+      required: [error]
+    CurrentUser:
+      type: object
+      properties:
+        id: { type: string }
+        role:
+          type: string
+          enum: [admin, client]
+        name: { type: string }
+        email: { type: string }
+        clientId: { type: ["string", "null"] }
+      required: [id, role, name, email, clientId]
+    ServiceStatus:
+      type: string
+      enum: [active, expiring_soon, expired]
+    ClientStatus:
+      type: string
+      enum: [active, inactive]
+    UpdateVisibility:
+      type: string
+      enum: [public, client_only]
+    UpdatePublishStatus:
+      type: string
+      enum: [published, draft]
+    Client:
+      type: object
+      properties:
+        id: { type: string }
+        clientId: { type: string }
+        fullName: { type: string }
+        phone: { type: string }
+        email: { type: string }
+        location: { type: ["string", "null"] }
+        notes: { type: ["string", "null"] }
+        status:
+          $ref: "#/components/schemas/ClientStatus"
+        registeredAt: { type: string, format: date-time }
+        serviceCount: { type: integer }
+      required: [id, clientId, fullName, phone, email, location, notes, status, registeredAt, serviceCount]
+    ClientDetail:
+      allOf:
+        - $ref: "#/components/schemas/Client"
+        - type: object
+          properties:
+            services:
+              type: array
+              items:
+                $ref: "#/components/schemas/Service"
+          required: [services]
+    ClientInput:
+      type: object
+      properties:
+        fullName: { type: string, minLength: 2 }
+        phone: { type: string, minLength: 5 }
+        email: { type: string, format: email }
+        clientId: { type: string, minLength: 2 }
+        password: { type: ["string", "null"], minLength: 8 }
+        location: { type: ["string", "null"] }
+        notes: { type: ["string", "null"] }
+      required: [fullName, phone, email, clientId]
+    ClientUpdate:
+      type: object
+      properties:
+        fullName: { type: string, minLength: 2 }
+        phone: { type: string, minLength: 5 }
+        email: { type: string, format: email }
+        location: { type: ["string", "null"] }
+        notes: { type: ["string", "null"] }
+        status:
+          $ref: "#/components/schemas/ClientStatus"
+    ProfileUpdate:
+      type: object
+      properties:
+        phone: { type: string, minLength: 5 }
+        email: { type: string, format: email }
+        location: { type: ["string", "null"] }
+      required: [phone, email]
+    Service:
+      type: object
+      properties:
+        id: { type: string }
+        clientId: { type: string }
+        clientName: { type: string }
+        serviceTypeId: { type: string }
+        serviceTypeName: { type: string }
+        serviceName: { type: string }
+        startDate: { type: string, format: date }
+        endDate: { type: string, format: date }
+        price: { type: ["number", "null"] }
+        status:
+          $ref: "#/components/schemas/ServiceStatus"
+        daysRemaining: { type: ["integer", "null"] }
+        notes: { type: ["string", "null"] }
+      required: [id, clientId, clientName, serviceTypeId, serviceTypeName, serviceName, startDate, endDate, price, status, daysRemaining, notes]
+    ServiceInput:
+      type: object
+      properties:
+        clientId: { type: string }
+        serviceTypeId: { type: string }
+        serviceName: { type: string, minLength: 2 }
+        startDate: { type: string, format: date }
+        endDate: { type: string, format: date }
+        price: { type: ["number", "null"], minimum: 0 }
+        notes: { type: ["string", "null"] }
+      required: [clientId, serviceTypeId, serviceName, startDate, endDate]
+    ServiceUpdate:
+      type: object
+      properties:
+        serviceTypeId: { type: string }
+        serviceName: { type: string, minLength: 2 }
+        startDate: { type: string, format: date }
+        endDate: { type: string, format: date }
+        price: { type: ["number", "null"], minimum: 0 }
+        notes: { type: ["string", "null"] }
+    ServiceType:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: ["string", "null"] }
+        active: { type: boolean }
+      required: [id, name, description, active]
+    ServiceTypeInput:
+      type: object
+      properties:
+        name: { type: string, minLength: 2 }
+        description: { type: ["string", "null"] }
+      required: [name]
+    ServiceTypeUpdate:
+      type: object
+      properties:
+        name: { type: string, minLength: 2 }
+        description: { type: ["string", "null"] }
+        active: { type: boolean }
+    Update:
+      type: object
+      properties:
+        id: { type: string }
+        slug: { type: string }
+        title: { type: string }
+        content: { type: string }
+        imageUrl: { type: ["string", "null"] }
+        linkUrl: { type: ["string", "null"] }
+        visibility:
+          $ref: "#/components/schemas/UpdateVisibility"
+        publishStatus:
+          $ref: "#/components/schemas/UpdatePublishStatus"
+        publishedAt: { type: ["string", "null"], format: date-time }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+      required: [id, slug, title, content, imageUrl, linkUrl, visibility, publishStatus, publishedAt, createdAt, updatedAt]
+    UpdateInput:
+      type: object
+      properties:
+        title: { type: string, minLength: 2 }
+        content: { type: string, minLength: 2 }
+        imageUrl: { type: ["string", "null"] }
+        linkUrl: { type: ["string", "null"], format: uri }
+        visibility:
+          $ref: "#/components/schemas/UpdateVisibility"
+        publishStatus:
+          $ref: "#/components/schemas/UpdatePublishStatus"
+      required: [title, content, visibility, publishStatus]
+    UpdateUpdate:
+      type: object
+      properties:
+        title: { type: string, minLength: 2 }
+        content: { type: string, minLength: 2 }
+        imageUrl: { type: ["string", "null"] }
+        linkUrl: { type: ["string", "null"], format: uri }
+        visibility:
+          $ref: "#/components/schemas/UpdateVisibility"
+        publishStatus:
+          $ref: "#/components/schemas/UpdatePublishStatus"
+    AttentionItem:
+      type: object
+      properties:
+        service:
+          $ref: "#/components/schemas/Service"
+        reason: { type: string }
+      required: [service, reason]
+    AdminSummary:
+      type: object
+      properties:
+        totalClients: { type: integer }
+        activeServices: { type: integer }
+        expiringSoon: { type: integer }
+        expiredServices: { type: integer }
+        attentionItems:
+          type: array
+          items:
+            $ref: "#/components/schemas/AttentionItem"
+        recentUpdates:
+          type: array
+          items:
+            $ref: "#/components/schemas/Update"
+      required: [totalClients, activeServices, expiringSoon, expiredServices, attentionItems, recentUpdates]
 

@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "Nutterx Connect Client Portal"
+description = "A secure client portal for Nutterx Connect to manage clients, subscribed services, expiry dates, service alerts, and shareable announcements for admins and clients."
+version = "1.0.0"
+id = "artifacts/nutterx-connect-portal"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 25780
+
+[services.development]
+run = "pnpm --filter @workspace/nutterx-connect-portal run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/nutterx-connect-portal", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/nutterx-connect-portal/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "25780"
+BASE_PATH = "/"

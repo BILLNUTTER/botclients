@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 96" role="img" aria-labelledby="title desc">
+  <title id="title">Nutterx Connect</title>
+  <desc id="desc">Orange Nutterx Connect wordmark with a signal mark</desc>
+  <rect width="360" height="96" rx="18" fill="#20160f"/>
+  <path d="M30 63V33h7l17 18V33h8v30h-7L45 45v18h-8Z" fill="#ff711f"/>
+  <path d="M74 63V33h8v22h17v8H74Zm30 0V33h8v30h-8Zm19 0V33h8v22h18v8h-26Zm35-30h26v8h-18v4h15v7h-15v3h18v8h-26V33Z" fill="#fff7ed"/>
+  <circle cx="310" cy="48" r="4" fill="#ff711f"/>
+  <path d="M298 36a17 17 0 0 1 0 24M290 41a10 10 0 0 1 0 14" fill="none" stroke="#ff711f" stroke-width="3" stroke-linecap="round"/>
+</svg>
