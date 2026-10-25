@@ -1,1 +1,2 @@
 - [Portal access model](portal-access.md) — public landing and active-client names; admin access is hidden behind `?admin=true` and a key, with no client sign-in.
+- [Client registration fields](client-registration.md) — registration collects only name, phone, amount paid, service, and service expiry; do not add service types.

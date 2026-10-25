@@ -8,10 +8,10 @@
 
 export interface ServiceInput {
   clientId: string;
-  serviceTypeId: string;
+  serviceTypeId?: string;
   /** @minLength 2 */
   serviceName: string;
-  startDate: Date;
+  startDate?: Date;
   endDate: Date;
   /**
      * @minimum 0

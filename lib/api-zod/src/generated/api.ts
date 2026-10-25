@@ -101,20 +101,18 @@ export const createAdminClientBodyFullNameMin = 2;
 
 export const createAdminClientBodyPhoneMin = 5;
 
-export const createAdminClientBodyClientIdMin = 2;
+export const createAdminClientBodyServiceNameMin = 2;
 
-export const createAdminClientBodyPasswordMin = 8;
+export const createAdminClientBodyAmountPaidMin = 0;
 
 
 
 export const CreateAdminClientBody = zod.object({
   "fullName": zod.string().min(createAdminClientBodyFullNameMin),
   "phone": zod.string().min(createAdminClientBodyPhoneMin),
-  "email": zod.string().email(),
-  "clientId": zod.string().min(createAdminClientBodyClientIdMin),
-  "password": zod.string().min(createAdminClientBodyPasswordMin).nullish(),
-  "location": zod.string().nullish(),
-  "notes": zod.string().nullish()
+  "serviceName": zod.string().min(createAdminClientBodyServiceNameMin),
+  "amountPaid": zod.number().min(createAdminClientBodyAmountPaidMin),
+  "serviceExpiry": zod.coerce.date()
 })
 
 export const CreateAdminClientResponse = zod.object({
@@ -249,9 +247,9 @@ export const createAdminServiceBodyPriceMin = 0;
 
 export const CreateAdminServiceBody = zod.object({
   "clientId": zod.string(),
-  "serviceTypeId": zod.string(),
+  "serviceTypeId": zod.string().optional(),
   "serviceName": zod.string().min(createAdminServiceBodyServiceNameMin),
-  "startDate": zod.coerce.date(),
+  "startDate": zod.coerce.date().optional(),
   "endDate": zod.coerce.date(),
   "price": zod.number().min(createAdminServiceBodyPriceMin).nullish(),
   "notes": zod.string().nullish()

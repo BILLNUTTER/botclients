@@ -11,16 +11,9 @@ export interface ClientInput {
   fullName: string;
   /** @minLength 5 */
   phone: string;
-  email: string;
   /** @minLength 2 */
-  clientId: string;
-  /**
-     * @minLength 8
-     * @nullable
-     */
-  password?: string | null;
-  /** @nullable */
-  location?: string | null;
-  /** @nullable */
-  notes?: string | null;
+  serviceName: string;
+  /** @minimum 0 */
+  amountPaid: number;
+  serviceExpiry: Date;
 }

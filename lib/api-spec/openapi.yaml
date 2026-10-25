@@ -488,12 +488,10 @@ components:
       properties:
         fullName: { type: string, minLength: 2 }
         phone: { type: string, minLength: 5 }
-        email: { type: string, format: email }
-        clientId: { type: string, minLength: 2 }
-        password: { type: ["string", "null"], minLength: 8 }
-        location: { type: ["string", "null"] }
-        notes: { type: ["string", "null"] }
-      required: [fullName, phone, email, clientId]
+        serviceName: { type: string, minLength: 2 }
+        amountPaid: { type: number, minimum: 0 }
+        serviceExpiry: { type: string, format: date }
+      required: [fullName, phone, serviceName, amountPaid, serviceExpiry]
     ClientUpdate:
       type: object
       properties:
@@ -538,7 +536,7 @@ components:
         endDate: { type: string, format: date }
         price: { type: ["number", "null"], minimum: 0 }
         notes: { type: ["string", "null"] }
-      required: [clientId, serviceTypeId, serviceName, startDate, endDate]
+      required: [clientId, serviceName, endDate]
     ServiceUpdate:
       type: object
       properties:

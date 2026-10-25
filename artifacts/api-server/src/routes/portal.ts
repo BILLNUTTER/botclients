@@ -111,7 +111,7 @@ async function serviceRows(filter: Filter<MongoService> = {}) {
       clientId: service.clientId,
       clientName: clientsById.get(service.clientId)?.fullName ?? "Unknown client",
       serviceTypeId: service.serviceTypeId,
-      serviceTypeName: typesById.get(service.serviceTypeId)?.name ?? "Other",
+      serviceTypeName: service.serviceTypeId ? typesById.get(service.serviceTypeId)?.name ?? "Other" : "",
       serviceName: service.serviceName,
       startDate: service.startDate,
       endDate: service.endDate,
@@ -278,13 +278,24 @@ router.get("/admin/clients", requireUser, requireAdmin, async (req, res) => {
 router.post("/admin/clients", requireUser, requireAdmin, async (req, res) => {
   try {
     const body = CreateAdminClientBody.parse(req.body);
+    const id = newId();
     const client: MongoClientRecord = {
-      _id: newId(), clientId: body.clientId, fullName: body.fullName, phone: body.phone, email: body.email,
-      location: body.location ?? null, notes: body.notes ?? null, status: "active", registeredAt: new Date(),
+      _id: id, clientId: `NX-${id.slice(0, 8).toUpperCase()}`, fullName: body.fullName, phone: body.phone, email: "",
+      location: null, notes: null, status: "active", registeredAt: new Date(),
+    };
+    const service: MongoService = {
+      _id: newId(), clientId: id, serviceTypeId: "", serviceName: body.serviceName,
+      startDate: todayEAT(), endDate: dateForDb(body.serviceExpiry), price: body.amountPaid, notes: null,
     };
     const db = await mongoDb();
     await mongoCollection<MongoClientRecord>(db, "clients").insertOne(client);
-    res.status(201).json(serializeClient(client, 0));
+    try {
+      await mongoCollection<MongoService>(db, "services").insertOne(service);
+    } catch (error) {
+      await mongoCollection<MongoClientRecord>(db, "clients").deleteOne({ _id: id });
+      throw error;
+    }
+    res.status(201).json(serializeClient(client, 1));
   } catch (error) {
     logger.error({ err: error }, "Unable to create client");
     res.status(400).json({ error: "Unable to create client" });
@@ -355,8 +366,8 @@ router.post("/admin/services", requireUser, requireAdmin, async (req, res) => {
   try {
     const body = CreateAdminServiceBody.parse(req.body);
     const service: MongoService = {
-      _id: newId(), clientId: body.clientId, serviceTypeId: body.serviceTypeId, serviceName: body.serviceName,
-      startDate: dateForDb(body.startDate), endDate: dateForDb(body.endDate), price: body.price ?? null, notes: body.notes ?? null,
+      _id: newId(), clientId: body.clientId, serviceTypeId: body.serviceTypeId ?? "", serviceName: body.serviceName,
+      startDate: body.startDate ? dateForDb(body.startDate) : todayEAT(), endDate: dateForDb(body.endDate), price: body.price ?? null, notes: body.notes ?? null,
     };
     const db = await mongoDb();
     await mongoCollection<MongoService>(db, "services").insertOne(service);
