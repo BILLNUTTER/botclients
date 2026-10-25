@@ -365,7 +365,6 @@ function AdminLogin() {
   </div>;
 }
 function RoleHome() { const query = useGetCurrentUser({ query: { queryKey: getGetCurrentUserQueryKey() } }); if (query.isLoading) return <PageLoader />; if (query.isError || !query.data) return <ErrorState onRetry={() => query.refetch()} />; return <Redirect to={query.data.role === 'admin' ? '/admin' : '/client'} />; }
-function SignedInRoute({ children }: { children: ReactNode }) { const { isSignedIn, isLoaded } = useAuth(); if (window.location.pathname.startsWith('/admin')) return <>{children}</>; if (!isLoaded) return <PageLoader />; return isSignedIn ? <>{children}</> : <Redirect to="/" />; }
 function AdminRoute({ children }: { children: ReactNode }) {
   const query = useQuery<CurrentUser>({
     queryKey: ['admin-session'],

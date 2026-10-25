@@ -1,0 +1,1 @@
+- [Portal access model](portal-access.md) — public landing and active-client names; admin access is hidden behind `?admin=true` and a key, with no client sign-in.
