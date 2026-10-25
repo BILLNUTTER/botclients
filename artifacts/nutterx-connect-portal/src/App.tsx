@@ -1,6 +1,5 @@
 import { type FormEvent, type ReactNode, useMemo, useState } from 'react';
-import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query';
-import { ClerkProvider, SignIn, SignUp, useAuth, useClerk } from '@clerk/react';
+import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Activity, ArrowRight, Bell, BriefcaseBusiness, Check, CircleAlert,
   CircleCheck, Clock3, Command, Copy, FileText, Filter, Globe2, LayoutDashboard, LifeBuoy,
@@ -28,44 +27,7 @@ import './index.css';
 
 const queryClient = new QueryClient();
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
-const clerkPubKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY;
-const clerkProxyUrl = import.meta.env.VITE_CLERK_PROXY_URL;
-
-const clerkAppearance = {
-  variables: {
-    colorPrimary: '#f97316',
-    colorForeground: '#24170f',
-    colorMutedForeground: '#816f63',
-    colorBackground: '#fffdfa',
-    colorInput: '#fffaf4',
-    colorInputForeground: '#24170f',
-    colorDanger: '#c2410c',
-    colorNeutral: '#eadfd3',
-    fontFamily: 'DM Sans, sans-serif',
-    borderRadius: '12px',
-  },
-  elements: {
-    rootBox: 'w-full flex justify-center',
-    cardBox: 'bg-[#fffdfa] rounded-2xl w-[440px] max-w-full overflow-hidden border border-[#eadfd3] shadow-xl',
-    card: '!shadow-none !border-0 !bg-transparent !rounded-none',
-    footer: '!shadow-none !border-0 !bg-transparent !rounded-none',
-    headerTitle: 'font-semibold tracking-tight text-[#24170f]',
-    headerSubtitle: 'text-[#816f63]',
-    formFieldLabel: 'text-[#24170f] font-medium',
-    formFieldInput: 'bg-[#fffaf4] border-[#eadfd3] text-[#24170f]',
-    formButtonPrimary: 'bg-[#f97316] hover:bg-[#ea580c] text-white',
-    socialButtonsBlockButton: 'border-[#eadfd3] text-[#24170f] bg-white',
-    socialButtonsBlockButtonText: 'text-[#24170f]',
-    footerActionText: 'text-[#816f63]',
-    footerActionLink: 'text-[#ea580c] font-semibold',
-    dividerText: 'text-[#816f63]',
-    alertText: 'text-[#c2410c]',
-    logoBox: 'h-12',
-    logoImage: 'h-12',
-    main: 'gap-5',
-  },
-};
-
+const useAuth = () => ({ isSignedIn: false });
 type IconType = typeof LayoutDashboard;
 type Tone = 'orange' | 'dark' | 'green' | 'red' | 'sand';
 
@@ -136,8 +98,8 @@ function Modal({ title, onClose, children }: { title: string; onClose: () => voi
   );
 }
 
-function Field({ label, value, onChange, type = 'text', placeholder, required = false }: { label: string; value: string; onChange: (v: string) => void; type?: string; placeholder?: string; required?: boolean }) {
-  return <label className="grid gap-1.5 text-sm font-medium">{label}{required && <span className="text-primary"> *</span>}<input required={required} type={type} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} className="input" data-testid={`input-${label.toLowerCase().replaceAll(' ', '-')}`} /></label>;
+function Field({ label, value, onChange, type = 'text', placeholder, required = false, autoComplete }: { label: string; value: string; onChange: (v: string) => void; type?: string; placeholder?: string; required?: boolean; autoComplete?: string }) {
+  return <label className="grid gap-1.5 text-sm font-medium">{label}{required && <span className="text-primary"> *</span>}<input required={required} type={type} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} autoComplete={autoComplete} className="input" data-testid={`input-${label.toLowerCase().replaceAll(' ', '-')}`} /></label>;
 }
 
 function TextareaField({ label, value, onChange, placeholder }: { label: string; value: string; onChange: (v: string) => void; placeholder?: string }) {
@@ -146,8 +108,11 @@ function TextareaField({ label, value, onChange, placeholder }: { label: string;
 
 function PortalShell({ user, children }: { user?: CurrentUser; children: ReactNode }) {
   const [menuOpen, setMenuOpen] = useState(false);
-  const { signOut } = useClerk();
   const isAdmin = user?.role === 'admin';
+  const logout = async () => {
+    await fetch('/api/admin/logout', { method: 'POST', credentials: 'include' });
+    window.location.href = `${basePath}/?admin=true`;
+  };
   const nav = isAdmin
     ? [
       { href: '/admin', label: 'Overview', icon: LayoutDashboard },
@@ -176,7 +141,7 @@ function PortalShell({ user, children }: { user?: CurrentUser; children: ReactNo
         </nav>
         <div className="mt-auto">
           <div className="mb-3 rounded-xl border border-sidebar-border bg-sidebar-foreground/[.04] p-3 text-xs text-sidebar-foreground/65"><ShieldCheck size={16} className="mb-2 text-primary" /><p className="font-semibold text-sidebar-foreground">Secure workspace</p><p className="mt-1 leading-relaxed">Your account and service details are protected.</p></div>
-          <div className="flex items-center gap-3 border-t border-sidebar-border px-2 pt-4"><span className="grid size-9 place-items-center rounded-full bg-primary text-sm font-bold text-white">{(user?.name || 'N')[0]}</span><div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold">{user?.name || 'Portal user'}</p><p className="truncate text-[11px] text-sidebar-foreground/50">{user?.email || 'Account'}</p></div><button onClick={() => signOut({ redirectUrl: basePath || '/' })} className="text-sidebar-foreground/50 transition hover:text-white" aria-label="Sign out" data-testid="button-sign-out"><LogOut size={16} /></button></div>
+           <div className="flex items-center gap-3 border-t border-sidebar-border px-2 pt-4"><span className="grid size-9 place-items-center rounded-full bg-primary text-sm font-bold text-white">{(user?.name || 'N')[0]}</span><div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold">{user?.name || 'Portal user'}</p><p className="truncate text-[11px] text-sidebar-foreground/50">{user?.email || 'Account'}</p></div><button onClick={logout} className="text-sidebar-foreground/50 transition hover:text-white" aria-label="Sign out" data-testid="button-sign-out"><LogOut size={16} /></button></div>
         </div>
       </aside>
       {menuOpen && <button onClick={() => setMenuOpen(false)} className="fixed inset-0 z-20 bg-[#24170f]/30 lg:hidden" aria-label="Close navigation" data-testid="button-overlay-menu" />}
@@ -311,22 +276,128 @@ function ClientProfile() { const query = useGetClientProfile(); const mut = useU
 
 function PublicUpdate() { const { slug = '' } = useParams<{ slug: string }>(); const query = useGetPublicUpdate(slug); if (query.isLoading) return <PageLoader label="Loading announcement" />; if (query.isError || !query.data) return <ErrorState onRetry={() => query.refetch()} />; const u = query.data; return <div className="min-h-[100dvh] bg-background"><header className="flex h-[72px] items-center justify-between border-b border-border px-5 sm:px-10"><Brand /><Link href="/" className="text-xs font-bold text-muted-foreground hover:text-primary" data-testid="link-public-home">Back to portal <ArrowRight size={14} className="ml-1 inline" /></Link></header><main className="mx-auto max-w-3xl px-5 py-16 sm:px-8 sm:py-24"><div className="mb-6 flex items-center gap-2 text-[10px] font-bold uppercase tracking-[.2em] text-primary"><Globe2 size={14} /> Nutterx Connect bulletin</div><h1 className="display max-w-3xl text-4xl font-bold leading-[.96] tracking-[-.08em] sm:text-6xl" data-testid="text-public-update-title">{u.title}</h1><p className="mt-5 text-sm text-muted-foreground">{formatDate(u.publishedAt || u.createdAt)}</p>{u.imageUrl && <img src={u.imageUrl} alt="" className="mt-10 max-h-[420px] w-full rounded-2xl object-cover" data-testid="img-public-update" />}<div className="prose prose-stone mt-10 max-w-none whitespace-pre-wrap text-[17px] leading-relaxed" data-testid="text-public-update-content">{u.content}</div>{u.linkUrl && <a href={u.linkUrl} target="_blank" rel="noreferrer" className="btn-primary mt-8 inline-flex" data-testid="link-public-update-cta"><Link2 size={15} /> Learn more</a>}<div className="mt-20 border-t border-border pt-5 text-xs text-muted-foreground">Nutterx Connect · Reliable services for Kenya</div></main></div>; }
 
-function Landing() { const { isSignedIn } = useAuth(); if (isSignedIn) return <RoleHome />; return <div className="min-h-[100dvh] overflow-hidden bg-background"><header className="flex h-[76px] items-center justify-between px-5 sm:px-10"><Brand /><div className="flex items-center gap-3"><Link href="/sign-in" className="btn-quiet" data-testid="link-sign-in">Sign in</Link><Link href="/sign-up" className="btn-primary" data-testid="link-sign-up">Create account <ArrowRight size={15} /></Link></div></header><main><section className="relative mx-auto grid max-w-[1440px] items-center gap-12 px-5 pb-20 pt-14 sm:px-10 sm:pt-24 lg:grid-cols-[1.05fr_.95fr] lg:pb-32"><div className="relative z-10 rise-in"><div className="mb-6 flex items-center gap-3 text-[11px] font-bold uppercase tracking-[.2em] text-primary"><span className="orange-rule" /> Built for staying connected</div><h1 className="display max-w-3xl text-5xl font-bold leading-[.88] tracking-[-.1em] sm:text-7xl lg:text-[7.2rem]">Your service.<br /><span className="text-primary">In focus.</span></h1><p className="mt-7 max-w-lg text-lg leading-relaxed text-muted-foreground">Nutterx Connect gives our clients a clear view of their services, expiry dates, and the updates that matter.</p><div className="mt-8 flex flex-wrap gap-3"><Link href="/sign-in" className="btn-primary px-6 py-3.5" data-testid="link-hero-sign-in">Open client portal <ArrowRight size={16} /></Link><a href="#how-it-works" className="btn-secondary px-6 py-3.5" data-testid="link-how-it-works">How it works</a></div><div className="mt-10 flex items-center gap-5 text-xs text-muted-foreground"><span className="flex items-center gap-2"><ShieldCheck size={15} className="text-primary" />Secure by design</span><span className="flex items-center gap-2"><Globe2 size={15} className="text-primary" />Kenya-based support</span></div></div><div className="relative min-h-[390px] rise-in delay-2"><div className="absolute right-0 top-1/2 size-[310px] -translate-y-1/2 rounded-full bg-primary lg:size-[430px]" /><div className="absolute left-8 top-8 z-10 w-[min(360px,88%)] rotate-[-5deg] rounded-2xl bg-sidebar p-5 text-white shadow-2xl sm:left-16 sm:top-12"><div className="flex items-center justify-between"><span className="display text-xs font-bold uppercase tracking-widest">Service posture</span><span className="grid size-7 place-items-center rounded-full bg-emerald-500"><Check size={15} /></span></div><p className="display mt-14 text-4xl font-bold">All good.</p><p className="mt-2 text-sm text-white/55">Your coverage is active and up to date.</p><div className="mt-8 h-1.5 overflow-hidden rounded-full bg-white/10"><div className="h-full w-[82%] rounded-full bg-primary" /></div><div className="mt-2 flex justify-between text-[10px] text-white/45"><span>Coverage window</span><span>82%</span></div></div><div className="absolute bottom-8 right-3 z-20 w-56 rotate-[6deg] rounded-2xl border border-border bg-white p-4 shadow-xl sm:right-8"><div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-muted-foreground"><Clock3 size={14} className="text-primary" /> Next expiry</div><p className="display mt-5 text-3xl font-bold">18 <span className="font-sans text-sm tracking-normal text-muted-foreground">days</span></p><p className="mt-1 text-xs font-medium">Home Connect · 4G</p></div></div></section><section id="how-it-works" className="border-y border-border bg-secondary/55"><div className="mx-auto grid max-w-[1440px] gap-0 px-5 sm:px-10 md:grid-cols-3"><Feature number="01" icon={Activity} title="See the signal" copy="One glance tells you what is active, what is close to expiry, and what needs a conversation." /><Feature number="02" icon={Bell} title="Stay in the loop" copy="Important service announcements arrive in the same place, without the noise." /><Feature number="03" icon={LifeBuoy} title="Get human help" copy="Your account context is ready for the Nutterx team when you need a hand." /></div></section><section className="mx-auto max-w-[1440px] px-5 py-20 sm:px-10 sm:py-28"><div className="grid gap-10 lg:grid-cols-[.7fr_1.3fr]"><div><p className="eyebrow">For the people behind the network</p><h2 className="display mt-3 max-w-md text-4xl font-bold leading-none tracking-[-.08em] sm:text-5xl">The cockpit for better follow-through.</h2></div><div className="grid gap-5 sm:grid-cols-2"><div className="surface rounded-2xl p-6"><Command size={22} className="text-primary" /><h3 className="mt-8 display text-xl font-bold">Tight operations</h3><p className="mt-2 text-sm leading-relaxed text-muted-foreground">Admins can find a client, trace a service, and act on expiry windows in fewer steps.</p></div><div className="rounded-2xl bg-primary p-6 text-white"><Sparkles size={22} /><h3 className="mt-8 display text-xl font-bold">A warmer portal</h3><p className="mt-2 text-sm leading-relaxed text-white/75">Clear language and calm surfaces make account management feel less like paperwork.</p></div></div></div></section></main><footer className="border-t border-border px-5 py-8 sm:px-10"><div className="mx-auto flex max-w-[1440px] flex-col justify-between gap-3 text-xs text-muted-foreground sm:flex-row"><span className="display font-bold uppercase tracking-[-.03em] text-foreground">Nutterx Connect</span><span>Reliable service, close to home.</span></div></footer></div>; }
+function Landing() { const { isSignedIn } = useAuth(); if (new URLSearchParams(window.location.search).get('admin') === 'true') return <AdminLogin />; if (isSignedIn) return <RoleHome />; return <div className="min-h-[100dvh] overflow-hidden bg-background"><header className="flex h-[76px] items-center justify-between px-5 sm:px-10"><Brand /><div className="flex items-center gap-3"><Link href="/sign-in" className="btn-quiet" data-testid="link-sign-in">Sign in</Link><Link href="/sign-up" className="btn-primary" data-testid="link-sign-up">Create account <ArrowRight size={15} /></Link></div></header><main><section className="relative mx-auto grid max-w-[1440px] items-center gap-12 px-5 pb-20 pt-14 sm:px-10 sm:pt-24 lg:grid-cols-[1.05fr_.95fr] lg:pb-32"><div className="relative z-10 rise-in"><div className="mb-6 flex items-center gap-3 text-[11px] font-bold uppercase tracking-[.2em] text-primary"><span className="orange-rule" /> Built for staying connected</div><h1 className="display max-w-3xl text-5xl font-bold leading-[.88] tracking-[-.1em] sm:text-7xl lg:text-[7.2rem]">Your service.<br /><span className="text-primary">In focus.</span></h1><p className="mt-7 max-w-lg text-lg leading-relaxed text-muted-foreground">Nutterx Connect gives our clients a clear view of their services, expiry dates, and the updates that matter.</p><div className="mt-8 flex flex-wrap gap-3"><Link href="/sign-in" className="btn-primary px-6 py-3.5" data-testid="link-hero-sign-in">Open client portal <ArrowRight size={16} /></Link><a href="#how-it-works" className="btn-secondary px-6 py-3.5" data-testid="link-how-it-works">How it works</a></div><div className="mt-10 flex items-center gap-5 text-xs text-muted-foreground"><span className="flex items-center gap-2"><ShieldCheck size={15} className="text-primary" />Secure by design</span><span className="flex items-center gap-2"><Globe2 size={15} className="text-primary" />Kenya-based support</span></div></div><div className="relative min-h-[390px] rise-in delay-2"><div className="absolute right-0 top-1/2 size-[310px] -translate-y-1/2 rounded-full bg-primary lg:size-[430px]" /><div className="absolute left-8 top-8 z-10 w-[min(360px,88%)] rotate-[-5deg] rounded-2xl bg-sidebar p-5 text-white shadow-2xl sm:left-16 sm:top-12"><div className="flex items-center justify-between"><span className="display text-xs font-bold uppercase tracking-widest">Service posture</span><span className="grid size-7 place-items-center rounded-full bg-emerald-500"><Check size={15} /></span></div><p className="display mt-14 text-4xl font-bold">All good.</p><p className="mt-2 text-sm text-white/55">Your coverage is active and up to date.</p><div className="mt-8 h-1.5 overflow-hidden rounded-full bg-white/10"><div className="h-full w-[82%] rounded-full bg-primary" /></div><div className="mt-2 flex justify-between text-[10px] text-white/45"><span>Coverage window</span><span>82%</span></div></div><div className="absolute bottom-8 right-3 z-20 w-56 rotate-[6deg] rounded-2xl border border-border bg-white p-4 shadow-xl sm:right-8"><div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-muted-foreground"><Clock3 size={14} className="text-primary" /> Next expiry</div><p className="display mt-5 text-3xl font-bold">18 <span className="font-sans text-sm tracking-normal text-muted-foreground">days</span></p><p className="mt-1 text-xs font-medium">Home Connect · 4G</p></div></div></section><section id="how-it-works" className="border-y border-border bg-secondary/55"><div className="mx-auto grid max-w-[1440px] gap-0 px-5 sm:px-10 md:grid-cols-3"><Feature number="01" icon={Activity} title="See the signal" copy="One glance tells you what is active, what is close to expiry, and what needs a conversation." /><Feature number="02" icon={Bell} title="Stay in the loop" copy="Important service announcements arrive in the same place, without the noise." /><Feature number="03" icon={LifeBuoy} title="Get human help" copy="Your account context is ready for the Nutterx team when you need a hand." /></div></section><section className="mx-auto max-w-[1440px] px-5 py-20 sm:px-10 sm:py-28"><div className="grid gap-10 lg:grid-cols-[.7fr_1.3fr]"><div><p className="eyebrow">For the people behind the network</p><h2 className="display mt-3 max-w-md text-4xl font-bold leading-none tracking-[-.08em] sm:text-5xl">The cockpit for better follow-through.</h2></div><div className="grid gap-5 sm:grid-cols-2"><div className="surface rounded-2xl p-6"><Command size={22} className="text-primary" /><h3 className="mt-8 display text-xl font-bold">Tight operations</h3><p className="mt-2 text-sm leading-relaxed text-muted-foreground">Admins can find a client, trace a service, and act on expiry windows in fewer steps.</p></div><div className="rounded-2xl bg-primary p-6 text-white"><Sparkles size={22} /><h3 className="mt-8 display text-xl font-bold">A warmer portal</h3><p className="mt-2 text-sm leading-relaxed text-white/75">Clear language and calm surfaces make account management feel less like paperwork.</p></div></div></div></section></main><footer className="border-t border-border px-5 py-8 sm:px-10"><div className="mx-auto flex max-w-[1440px] flex-col justify-between gap-3 text-xs text-muted-foreground sm:flex-row"><span className="display font-bold uppercase tracking-[-.03em] text-foreground">Nutterx Connect</span><span>Reliable service, close to home.</span></div></footer></div>; }
+
+function PublicLanding() {
+  const adminMode = new URLSearchParams(window.location.search).get('admin') === 'true';
+  const clientsQuery = useQuery<{ name: string }[]>({
+    queryKey: ['public-active-clients'],
+    enabled: !adminMode,
+    queryFn: async () => {
+      const response = await fetch('/api/public/clients');
+      if (!response.ok) throw new Error('Unable to load active clients');
+      return response.json() as Promise<{ name: string }[]>;
+    },
+    staleTime: 30_000,
+  });
+  if (adminMode) return <AdminLogin />;
+  return <div className="min-h-[100dvh] overflow-hidden bg-background">
+    <header className="flex h-[76px] items-center justify-between px-5 sm:px-10">
+      <Brand />
+      <a href="#active-clients" className="btn-secondary" data-testid="link-active-clients">Active clients <ArrowRight size={15} /></a>
+    </header>
+    <main>
+      <section className="relative mx-auto grid max-w-[1440px] items-center gap-12 px-5 pb-20 pt-14 sm:px-10 sm:pt-24 lg:grid-cols-[1.05fr_.95fr] lg:pb-28">
+        <div className="relative z-10 rise-in">
+          <div className="mb-6 flex items-center gap-3 text-[11px] font-bold uppercase tracking-[.2em] text-primary"><span className="orange-rule" /> Nutterx Connect</div>
+          <h1 className="display max-w-3xl text-5xl font-bold leading-[.88] tracking-[-.1em] sm:text-7xl lg:text-[7.2rem]">Connected.<br /><span className="text-primary">And in focus.</span></h1>
+          <p className="mt-7 max-w-lg text-lg leading-relaxed text-muted-foreground">A clear view of the active clients in our service network, managed by the Nutterx Connect team.</p>
+          <a href="#active-clients" className="btn-primary mt-8 px-6 py-3.5">View active clients <ArrowRight size={16} /></a>
+        </div>
+        <div className="relative min-h-[300px] rise-in delay-2">
+          <div className="absolute right-0 top-1/2 size-[260px] -translate-y-1/2 rounded-full bg-primary sm:size-[340px]" />
+          <div className="absolute left-4 top-1/2 z-10 w-[min(360px,90%)] -translate-y-1/2 rotate-[-4deg] rounded-2xl bg-sidebar p-6 text-white shadow-2xl sm:left-12">
+            <p className="eyebrow text-primary">Service network</p><p className="display mt-8 text-4xl font-bold">Nutterx<br />Connect</p><p className="mt-3 text-sm text-white/60">Client relationships, managed with care.</p>
+          </div>
+        </div>
+      </section>
+      <section id="active-clients" className="border-y border-border bg-secondary/45 px-5 py-16 sm:px-10 sm:py-20">
+        <div className="mx-auto max-w-[1200px]">
+          <div className="mb-8 flex flex-col justify-between gap-3 sm:flex-row sm:items-end"><div><p className="eyebrow">Client directory</p><h2 className="display mt-2 text-3xl font-bold tracking-tight sm:text-4xl">Active clients</h2></div>{clientsQuery.data && <span className="mono text-sm text-muted-foreground">{clientsQuery.data.length} active</span>}</div>
+          {clientsQuery.isLoading ? <PageLoader label="Loading active clients" /> : clientsQuery.isError ? <ErrorState onRetry={() => clientsQuery.refetch()} /> : clientsQuery.data?.length ? <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{clientsQuery.data.map((client, index) => <div key={`${client.name}-${index}`} className="surface flex items-center gap-3 rounded-xl p-4" data-testid={`public-active-client-${index}`}><span className="grid size-10 place-items-center rounded-full bg-accent text-sm font-bold text-primary">{initials(client.name)}</span><span className="font-semibold">{client.name}</span><span className="ml-auto size-2 rounded-full bg-emerald-500" aria-label="Active" /></div>)}</div> : <EmptyState icon={Users} title="No active clients to show" copy="The public client directory will update as active clients are added." />}
+        </div>
+      </section>
+    </main>
+    <footer className="border-t border-border px-5 py-7 sm:px-10"><div className="mx-auto flex max-w-[1440px] flex-col justify-between gap-3 text-xs text-muted-foreground sm:flex-row"><span className="display font-bold uppercase tracking-[-.03em] text-foreground">Nutterx Connect</span><span>Reliable service, close to home.</span></div></footer>
+  </div>;
+}
 
 function Feature({ number, icon: Icon, title, copy }: { number: string; icon: IconType; title: string; copy: string }) { return <div className="border-b border-border px-0 py-8 md:border-b-0 md:border-r md:px-8 md:py-12 first:md:pl-0 last:md:border-r-0"><div className="flex items-center justify-between"><span className="mono text-xs text-primary">{number}</span><Icon size={18} className="text-primary" /></div><h3 className="display mt-8 text-xl font-bold">{title}</h3><p className="mt-2 text-sm leading-relaxed text-muted-foreground">{copy}</p></div>; }
 
+function AdminLogin() {
+  const [, setLocation] = useLocation();
+  const [key, setKey] = useState('');
+  const [error, setError] = useState('');
+  const [pending, setPending] = useState(false);
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    setPending(true);
+    setError('');
+    try {
+      const response = await fetch('/api/admin/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ key }),
+      });
+      if (!response.ok) {
+        setError('The administrator credentials were not accepted.');
+        return;
+      }
+      setLocation('/admin');
+    } catch {
+      setError('Unable to connect to the portal. Try again.');
+    } finally {
+      setPending(false);
+    }
+  };
+  return <div className="auth-page min-h-[100dvh] bg-background px-5">
+    <div className="surface w-full max-w-md rounded-2xl p-7 sm:p-9">
+      <Brand />
+      <div className="mt-10"><p className="eyebrow">Restricted access</p><h1 className="display mt-2 text-3xl font-bold">Administrator login</h1><p className="mt-2 text-sm leading-relaxed text-muted-foreground">Sign in to manage clients, services, and announcements.</p></div>
+      <form onSubmit={submit} className="mt-7 grid gap-4">
+        <Field label="Admin key" value={key} onChange={setKey} type="password" autoComplete="current-password" required />
+        {error && <p className="rounded-xl bg-red-50 p-3 text-sm text-red-700" role="alert">{error}</p>}
+        <button disabled={pending} className="btn-primary mt-2 justify-center" data-testid="button-admin-login">{pending ? 'Signing in…' : 'Sign in to admin'}</button>
+      </form>
+      <Link href="/" className="mt-6 block text-center text-xs font-semibold text-muted-foreground hover:text-primary">Return to client portal</Link>
+    </div>
+  </div>;
+}
 function RoleHome() { const query = useGetCurrentUser({ query: { queryKey: getGetCurrentUserQueryKey() } }); if (query.isLoading) return <PageLoader />; if (query.isError || !query.data) return <ErrorState onRetry={() => query.refetch()} />; return <Redirect to={query.data.role === 'admin' ? '/admin' : '/client'} />; }
-function SignedInRoute({ children }: { children: ReactNode }) { const { isSignedIn, isLoaded } = useAuth(); if (!isLoaded) return <PageLoader />; return isSignedIn ? <>{children}</> : <Redirect to="/" />; }
-function AdminRoute({ children }: { children: ReactNode }) { const query = useGetCurrentUser({ query: { queryKey: getGetCurrentUserQueryKey() } }); if (query.isLoading) return <PageLoader />; if (!query.data || query.data.role !== 'admin') return <Redirect to="/client" />; return <PortalShell user={query.data}>{children}</PortalShell>; }
+function SignedInRoute({ children }: { children: ReactNode }) { const { isSignedIn, isLoaded } = useAuth(); if (window.location.pathname.startsWith('/admin')) return <>{children}</>; if (!isLoaded) return <PageLoader />; return isSignedIn ? <>{children}</> : <Redirect to="/" />; }
+function AdminRoute({ children }: { children: ReactNode }) {
+  const query = useQuery<CurrentUser>({
+    queryKey: ['admin-session'],
+    queryFn: async () => {
+      const response = await fetch('/api/admin/session', { credentials: 'include' });
+      if (!response.ok) throw new Error('Administrator login required');
+      return response.json() as Promise<CurrentUser>;
+    },
+    retry: false,
+  });
+  if (query.isLoading) return <PageLoader label="Checking administrator session" />;
+  if (query.isError || !query.data) return <Redirect to="/?admin=true" />;
+  return <PortalShell user={query.data}>{children}</PortalShell>;
+}
 function ClientRoute({ children }: { children: ReactNode }) { const query = useGetCurrentUser({ query: { queryKey: getGetCurrentUserQueryKey() } }); if (query.isLoading) return <PageLoader />; if (!query.data || query.data.role !== 'client') return <Redirect to="/admin" />; return <PortalShell user={query.data}>{children}</PortalShell>; }
 
 function AuthRoutes() {
-  return <Switch><Route path="/"><Landing /></Route><Route path="/sign-in/*?"><div className="auth-page"><SignIn routing="path" path={`${basePath}/sign-in`} signUpUrl={`${basePath}/sign-up`} /></div></Route><Route path="/sign-up/*?"><div className="auth-page"><SignUp routing="path" path={`${basePath}/sign-up`} signInUrl={`${basePath}/sign-in`} /></div></Route><Route path="/admin"><SignedInRoute><AdminRoute><AdminHome /></AdminRoute></SignedInRoute></Route><Route path="/admin/clients"><SignedInRoute><AdminRoute><AdminClients /></AdminRoute></SignedInRoute></Route><Route path="/admin/clients/:id"><SignedInRoute><AdminRoute><AdminClientDetail /></AdminRoute></SignedInRoute></Route><Route path="/admin/services"><SignedInRoute><AdminRoute><AdminServices /></AdminRoute></SignedInRoute></Route><Route path="/admin/service-types"><SignedInRoute><AdminRoute><AdminServiceTypes /></AdminRoute></SignedInRoute></Route><Route path="/admin/updates"><SignedInRoute><AdminRoute><AdminUpdates /></AdminRoute></SignedInRoute></Route><Route path="/admin/updates/new"><SignedInRoute><AdminRoute><UpdateEditor /></AdminRoute></SignedInRoute></Route><Route path="/client"><SignedInRoute><ClientRoute><ClientHome /></ClientRoute></SignedInRoute></Route><Route path="/client/services"><SignedInRoute><ClientRoute><ClientServices /></ClientRoute></SignedInRoute></Route><Route path="/client/updates"><SignedInRoute><ClientRoute><ClientUpdates /></ClientRoute></SignedInRoute></Route><Route path="/client/profile"><SignedInRoute><ClientRoute><ClientProfile /></ClientRoute></SignedInRoute></Route><Route path="/updates/:slug"><PublicUpdate /></Route><Route component={NotFound} /></Switch>;
+  return <Switch>
+    <Route path="/"><PublicLanding /></Route>
+    <Route path="/admin"><AdminRoute><AdminHome /></AdminRoute></Route>
+    <Route path="/admin/clients"><AdminRoute><AdminClients /></AdminRoute></Route>
+    <Route path="/admin/clients/:id"><AdminRoute><AdminClientDetail /></AdminRoute></Route>
+    <Route path="/admin/services"><AdminRoute><AdminServices /></AdminRoute></Route>
+    <Route path="/admin/service-types"><AdminRoute><AdminServiceTypes /></AdminRoute></Route>
+    <Route path="/admin/updates"><AdminRoute><AdminUpdates /></AdminRoute></Route>
+    <Route path="/admin/updates/new"><AdminRoute><UpdateEditor /></AdminRoute></Route>
+    <Route path="/updates/:slug"><PublicUpdate /></Route>
+    <Route component={NotFound} />
+  </Switch>;
 }
 
-function AppWithClerk() { return <ClerkProvider publishableKey={clerkPubKey} proxyUrl={clerkProxyUrl} appearance={clerkAppearance} signInUrl={`${basePath}/sign-in`} signUpUrl={`${basePath}/sign-up`} routerPush={(to: string) => { window.history.pushState({}, '', to); window.dispatchEvent(new PopStateEvent('popstate')); }} routerReplace={(to: string) => { window.history.replaceState({}, '', to); window.dispatchEvent(new PopStateEvent('popstate')); }}><AuthRoutes /></ClerkProvider>; }
-function App() { return <QueryClientProvider client={queryClient}><TooltipProvider><WouterRouter base={basePath}><ErrorBoundary resetKey={window.location.pathname}>{clerkPubKey ? <AppWithClerk /> : <AuthlessFallback />}</ErrorBoundary></WouterRouter><Toaster /></TooltipProvider></QueryClientProvider>; }
-function AuthlessFallback() { return <Switch><Route path="/updates/:slug"><PublicUpdate /></Route><Route path="/"><div className="auth-page"><div className="surface max-w-md rounded-2xl p-8 text-center"><Brand /><h1 className="display mt-10 text-3xl font-bold">Nutterx Connect</h1><p className="mt-3 text-sm text-muted-foreground">Authentication is being connected for this workspace.</p></div></div></Route><Route component={NotFound} /></Switch>; }
+function App() { return <QueryClientProvider client={queryClient}><TooltipProvider><WouterRouter base={basePath}><ErrorBoundary resetKey={window.location.pathname}><AuthRoutes /></ErrorBoundary></WouterRouter><Toaster /></TooltipProvider></QueryClientProvider>; }
 
 function formatDate(value: string) { if (!value) return '—'; return new Intl.DateTimeFormat('en-KE', { day: 'numeric', month: 'short', year: 'numeric' }).format(new Date(value)); }
 function initials(name: string) { return name.split(' ').map((part) => part[0]).slice(0, 2).join('').toUpperCase(); }

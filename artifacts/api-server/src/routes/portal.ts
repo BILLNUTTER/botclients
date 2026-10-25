@@ -1,14 +1,6 @@
 import { Router, type NextFunction, type Request, type Response } from "express";
-import { getAuth } from "@clerk/express";
-import { and, asc, desc, eq, ilike, inArray, or } from "drizzle-orm";
-import {
-  db,
-  clientsTable,
-  serviceTypesTable,
-  servicesTable,
-  updatesTable,
-  usersTable,
-} from "@workspace/db";
+import { type Filter } from "mongodb";
+import { timingSafeEqual } from "node:crypto";
 import {
   CreateAdminClientBody,
   CreateAdminServiceBody,
@@ -20,19 +12,31 @@ import {
   UpdateClientProfileBody,
   UpdateServiceTypeBody,
 } from "@workspace/api-zod";
+import {
+  mongoCollection,
+  mongoDb,
+  newId,
+  signAdminSession,
+  verifyAdminSession,
+  type MongoClientRecord,
+  type MongoService,
+  type MongoServiceType,
+  type MongoUpdate,
+} from "../lib/mongo";
 import { logger } from "../lib/logger";
 
 const router = Router();
-type AuthedRequest = Request & { portalUser?: PortalUserContext };
+const ADMIN_COOKIE = "nutterx_admin_session";
 type PortalRole = "admin" | "client";
 type PortalUserContext = {
-  id: number;
+  id: string;
   clerkId: string;
   name: string;
   email: string;
   role: PortalRole;
-  clientId: number | null;
+  clientId: string | null;
 };
+type AuthedRequest = Request & { portalUser?: PortalUserContext };
 
 function todayEAT(): string {
   return new Intl.DateTimeFormat("en-CA", {
@@ -50,7 +54,7 @@ function daysUntil(endDate: string): number {
 }
 
 function dateForDb(value: Date | string): string {
-  return typeof value === "string" ? value : value.toISOString().slice(0, 10);
+  return typeof value === "string" ? value.slice(0, 10) : value.toISOString().slice(0, 10);
 }
 
 function statusFor(endDate: string): "active" | "expiring_soon" | "expired" {
@@ -60,185 +64,176 @@ function statusFor(endDate: string): "active" | "expiring_soon" | "expired" {
   return "active";
 }
 
-function serializeService(row: {
-  service: typeof servicesTable.$inferSelect;
-  client: typeof clientsTable.$inferSelect | null;
-  serviceType: typeof serviceTypesTable.$inferSelect | null;
-}) {
-  const daysRemaining = daysUntil(row.service.endDate);
+function serializeClient(row: MongoClientRecord, serviceCount: number) {
   return {
-    id: String(row.service.id),
-    clientId: String(row.service.clientId),
-    clientName: row.client?.fullName ?? "Unknown client",
-    serviceTypeId: String(row.service.serviceTypeId),
-    serviceTypeName: row.serviceType?.name ?? "Other",
-    serviceName: row.service.serviceName,
-    startDate: row.service.startDate,
-    endDate: row.service.endDate,
-    price: row.service.price === null ? null : Number(row.service.price),
-    status: statusFor(row.service.endDate),
-    daysRemaining: daysRemaining < 0 ? null : daysRemaining,
-    notes: row.service.notes,
-  };
-}
-
-function serializeClient(
-  row: typeof clientsTable.$inferSelect,
-  serviceCount: number,
-) {
-  return {
-    id: String(row.id),
+    id: row._id,
     clientId: row.clientId,
     fullName: row.fullName,
     phone: row.phone,
     email: row.email,
     location: row.location,
     notes: row.notes,
-    status: row.status as "active" | "inactive",
+    status: row.status,
     registeredAt: row.registeredAt.toISOString(),
     serviceCount,
   };
 }
 
-function serializeUpdate(row: typeof updatesTable.$inferSelect) {
+function serializeUpdate(row: MongoUpdate) {
   return {
-    id: String(row.id),
+    id: row._id,
     slug: row.slug,
     title: row.title,
     content: row.content,
     imageUrl: row.imageUrl,
     linkUrl: row.linkUrl,
-    visibility: row.visibility as "public" | "client_only",
-    publishStatus: row.publishStatus as "published" | "draft",
+    visibility: row.visibility,
+    publishStatus: row.publishStatus,
     publishedAt: row.publishedAt?.toISOString() ?? null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
 }
 
-async function findPortalUser(clerkId: string): Promise<PortalUserContext | null> {
-  const [row] = await db.select().from(usersTable).where(eq(usersTable.clerkId, clerkId)).limit(1);
-  if (!row) return null;
-  return {
-    id: row.id,
-    clerkId: row.clerkId,
-    name: row.name,
-    email: row.email,
-    role: row.role === "admin" ? "admin" : "client",
-    clientId: row.clientId,
-  };
+async function serviceRows(filter: Filter<MongoService> = {}) {
+  const db = await mongoDb();
+  const [services, clients, types] = await Promise.all([
+    mongoCollection<MongoService>(db, "services").find(filter).sort({ endDate: 1 }).toArray(),
+    mongoCollection<MongoClientRecord>(db, "clients").find({}).toArray(),
+    mongoCollection<MongoServiceType>(db, "service_types").find({}).toArray(),
+  ]);
+  const clientsById = new Map(clients.map((client) => [client._id, client]));
+  const typesById = new Map(types.map((type) => [type._id, type]));
+  return services.map((service) => {
+    const daysRemaining = daysUntil(service.endDate);
+    return {
+      id: service._id,
+      clientId: service.clientId,
+      clientName: clientsById.get(service.clientId)?.fullName ?? "Unknown client",
+      serviceTypeId: service.serviceTypeId,
+      serviceTypeName: typesById.get(service.serviceTypeId)?.name ?? "Other",
+      serviceName: service.serviceName,
+      startDate: service.startDate,
+      endDate: service.endDate,
+      price: service.price,
+      status: statusFor(service.endDate),
+      daysRemaining: daysRemaining < 0 ? null : daysRemaining,
+      notes: service.notes,
+    };
+  });
 }
 
-async function ensurePortalUser(req: Request): Promise<PortalUserContext | null> {
-  const auth = getAuth(req);
-  const clerkId = auth.userId;
-  if (!clerkId) return null;
-  const existing = await findPortalUser(clerkId);
-  if (existing) return existing;
-
-  const claims = (auth.sessionClaims ?? {}) as Record<string, unknown>;
-  const email = typeof claims.email === "string" ? claims.email : `${clerkId}@portal.local`;
-  const name = typeof claims.name === "string" ? claims.name : "Nutterx user";
-  const [matchingClient] = await db
-    .select()
-    .from(clientsTable)
-    .where(eq(clientsTable.email, email))
-    .limit(1);
-  const [existingUser] = await db.select({ id: usersTable.id }).from(usersTable).limit(1);
-  const role: PortalRole = existingUser ? "client" : "admin";
-  const [created] = await db
-    .insert(usersTable)
-    .values({
-      clerkId,
-      name: matchingClient?.fullName ?? name,
-      email,
-      role,
-      clientId: matchingClient?.id ?? null,
-    })
-    .returning();
-  return {
-    id: created.id,
-    clerkId: created.clerkId,
-    name: created.name,
-    email: created.email,
-    role,
-    clientId: created.clientId,
-  };
+async function countsByClient() {
+  const db = await mongoDb();
+  const rows = await mongoCollection<MongoService>(db, "services").find({}).toArray();
+  const counts = new Map<string, number>();
+  for (const service of rows) counts.set(service.clientId, (counts.get(service.clientId) ?? 0) + 1);
+  return counts;
 }
 
-async function requireUser(req: Request, res: Response, next: NextFunction) {
-  try {
-    const user = await ensurePortalUser(req);
-    if (!user) {
-      res.status(401).json({ error: "Authentication required" });
-      return;
-    }
-    (req as AuthedRequest).portalUser = user;
-    next();
-  } catch (error) {
-    logger.error({ err: error }, "Unable to resolve portal user");
-    res.status(500).json({ error: "Unable to resolve account" });
+function adminContext(req: Request): PortalUserContext | null {
+  const session = verifyAdminSession(req.cookies?.[ADMIN_COOKIE]);
+  if (!session) return null;
+  return { id: "admin", clerkId: "admin", name: "Nutterx Administrator", email: "Administrator", role: "admin", clientId: null };
+}
+
+function requireUser(req: Request, res: Response, next: NextFunction) {
+  const user = adminContext(req);
+  if (!user) {
+    res.status(401).json({ error: "Administrator login required" });
+    return;
   }
+  (req as AuthedRequest).portalUser = user;
+  next();
 }
 
 function requireAdmin(req: Request, res: Response, next: NextFunction) {
-  const user = (req as AuthedRequest).portalUser;
-  if (user?.role !== "admin") {
+  if ((req as AuthedRequest).portalUser?.role !== "admin") {
     res.status(403).json({ error: "Administrator access required" });
     return;
   }
   next();
 }
 
-async function serviceRows(where?: ReturnType<typeof and>) {
-  const query = db
-    .select({
-      service: servicesTable,
-      client: clientsTable,
-      serviceType: serviceTypesTable,
-    })
-    .from(servicesTable)
-    .leftJoin(clientsTable, eq(servicesTable.clientId, clientsTable.id))
-    .leftJoin(serviceTypesTable, eq(servicesTable.serviceTypeId, serviceTypesTable.id));
-  const rows = where ? await query.where(where) : await query;
-  return rows.map(serializeService);
+function safeEqual(left: string, right: string): boolean {
+  const a = Buffer.from(left);
+  const b = Buffer.from(right);
+  return a.length === b.length && timingSafeEqual(a, b);
 }
 
-async function countsByClient() {
-  const rows = await db.select({ id: clientsTable.id }).from(clientsTable);
-  const counts = new Map<number, number>();
-  for (const client of rows) counts.set(client.id, 0);
-  const serviceRowsForCount = await db.select({ clientId: servicesTable.clientId }).from(servicesTable);
-  for (const row of serviceRowsForCount) counts.set(row.clientId, (counts.get(row.clientId) ?? 0) + 1);
-  return counts;
-}
+const loginAttempts = new Map<string, { count: number; resetAt: number }>();
+
+router.post("/admin/login", (req, res) => {
+  const ip = req.ip || "unknown";
+  const current = loginAttempts.get(ip);
+  const now = Date.now();
+  if (current && current.resetAt > now && current.count >= 6) {
+    res.status(429).json({ error: "Too many attempts. Try again in 15 minutes." });
+    return;
+  }
+  const key = typeof req.body?.key === "string" ? req.body.key : "";
+  const expectedKey = process.env.NUTTERX_ADMIN_PASSWORD ?? "";
+  if (!expectedKey || !safeEqual(key, expectedKey)) {
+    loginAttempts.set(ip, current && current.resetAt > now ? { ...current, count: current.count + 1 } : { count: 1, resetAt: now + 15 * 60 * 1000 });
+    res.status(401).json({ error: "Invalid administrator key" });
+    return;
+  }
+  loginAttempts.delete(ip);
+  const expiresAt = Date.now() + 8 * 60 * 60 * 1000;
+  res.cookie(ADMIN_COOKIE, signAdminSession("admin", expiresAt), {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    maxAge: 8 * 60 * 60 * 1000,
+  });
+  res.json({ id: "admin", role: "admin", name: "Nutterx Administrator", email: "Administrator", clientId: null });
+});
+
+router.get("/public/clients", async (_req, res) => {
+  try {
+    const db = await mongoDb();
+    const clients = await mongoCollection<MongoClientRecord>(db, "clients")
+      .find({ status: "active" }, { projection: { fullName: 1, _id: 0 } })
+      .sort({ fullName: 1 })
+      .toArray();
+    res.json(clients.map((client) => ({ name: client.fullName })));
+  } catch (error) {
+    logger.error({ err: error }, "Unable to list public active clients");
+    res.status(503).json({ error: "Active client list is temporarily unavailable" });
+  }
+});
+
+router.get("/admin/session", (req, res) => {
+  const user = adminContext(req);
+  if (!user) {
+    res.status(401).json({ error: "Administrator login required" });
+    return;
+  }
+  res.json({ id: user.clerkId, role: user.role, name: user.name, email: user.email, clientId: null });
+});
+
+router.post("/admin/logout", (req, res) => {
+  res.clearCookie(ADMIN_COOKIE);
+  res.status(204).send();
+});
 
 router.get("/auth/me", requireUser, (req, res) => {
   const user = (req as AuthedRequest).portalUser!;
-  res.json({
-    id: user.clerkId,
-    role: user.role,
-    name: user.name,
-    email: user.email,
-    clientId: user.clientId === null ? null : String(user.clientId),
-  });
+  res.json({ id: user.clerkId, role: user.role, name: user.name, email: user.email, clientId: user.clientId });
 });
 
 router.get("/admin/summary", requireUser, requireAdmin, async (_req, res) => {
   try {
+    const db = await mongoDb();
     const [clients, services, updates] = await Promise.all([
-      db.select().from(clientsTable),
+      mongoCollection<MongoClientRecord>(db, "clients").find({}).toArray(),
       serviceRows(),
-      db.select().from(updatesTable).orderBy(desc(updatesTable.createdAt)).limit(5),
+      mongoCollection<MongoUpdate>(db, "updates").find({}).sort({ createdAt: -1 }).limit(5).toArray(),
     ]);
-    const attentionItems = services
-      .filter((service) => service.status !== "active")
-      .sort((a, b) => (a.daysRemaining ?? -999) - (b.daysRemaining ?? -999))
-      .slice(0, 8)
-      .map((service) => ({
-        service,
-        reason: service.status === "expired" ? "Expired service" : "Expires within 7 days",
-      }));
+    const attentionItems = services.filter((service) => service.status !== "active").sort((a, b) => (a.daysRemaining ?? -999) - (b.daysRemaining ?? -999)).slice(0, 8).map((service) => ({
+      service,
+      reason: service.status === "expired" ? "Expired service" : "Expires within 7 days",
+    }));
     res.json({
       totalClients: clients.filter((client) => client.status === "active").length,
       activeServices: services.filter((service) => service.status === "active").length,
@@ -255,32 +250,25 @@ router.get("/admin/summary", requireUser, requireAdmin, async (_req, res) => {
 
 router.get("/admin/clients", requireUser, requireAdmin, async (req, res) => {
   try {
-    const query = typeof req.query.search === "string" ? req.query.search.trim() : "";
-    const status = typeof req.query.status === "string" ? req.query.status : undefined;
-    const serviceTypeId = typeof req.query.serviceTypeId === "string" ? Number(req.query.serviceTypeId) : undefined;
-    let clients = await db.select().from(clientsTable).orderBy(asc(clientsTable.fullName));
-    if (query) {
-      const lower = query.toLowerCase();
-      clients = clients.filter((client) =>
-        [client.fullName, client.phone, client.email, client.clientId].some((field) => field.toLowerCase().includes(lower)),
-      );
-    }
-    if (status === "inactive" || status === "active") clients = clients.filter((client) => client.status === status);
+    const db = await mongoDb();
+    const search = typeof req.query.search === "string" ? req.query.search.trim().toLowerCase() : "";
+    const status = typeof req.query.status === "string" ? req.query.status : "";
+    const serviceTypeId = typeof req.query.serviceTypeId === "string" ? req.query.serviceTypeId : "";
+    let clients = await mongoCollection<MongoClientRecord>(db, "clients").find({}).sort({ fullName: 1 }).toArray();
+    if (search) clients = clients.filter((client) => [client.fullName, client.phone, client.email, client.clientId].some((field) => field.toLowerCase().includes(search)));
+    if (status === "active" || status === "inactive") clients = clients.filter((client) => client.status === status);
+    const serviceFilter: Filter<MongoService> = serviceTypeId ? { serviceTypeId } : {};
     if (status === "expiring_soon" || status === "expired") {
-      const serviceRowsForClients = await serviceRows(
-        serviceTypeId ? eq(servicesTable.serviceTypeId, serviceTypeId) : undefined,
-      );
-      const ids = new Set(
-        serviceRowsForClients.filter((service) => service.status === status).map((service) => Number(service.clientId)),
-      );
-      clients = clients.filter((client) => ids.has(client.id));
+      const rows = await serviceRows(serviceFilter);
+      const ids = new Set(rows.filter((service) => service.status === status).map((service) => service.clientId));
+      clients = clients.filter((client) => ids.has(client._id));
     } else if (serviceTypeId) {
-      const serviceRowsForClients = await serviceRows(eq(servicesTable.serviceTypeId, serviceTypeId));
-      const ids = new Set(serviceRowsForClients.map((service) => Number(service.clientId)));
-      clients = clients.filter((client) => ids.has(client.id));
+      const rows = await serviceRows(serviceFilter);
+      const ids = new Set(rows.map((service) => service.clientId));
+      clients = clients.filter((client) => ids.has(client._id));
     }
     const counts = await countsByClient();
-    res.json(clients.map((client) => serializeClient(client, counts.get(client.id) ?? 0)));
+    res.json(clients.map((client) => serializeClient(client, counts.get(client._id) ?? 0)));
   } catch (error) {
     logger.error({ err: error }, "Unable to list clients");
     res.status(500).json({ error: "Unable to list clients" });
@@ -290,17 +278,12 @@ router.get("/admin/clients", requireUser, requireAdmin, async (req, res) => {
 router.post("/admin/clients", requireUser, requireAdmin, async (req, res) => {
   try {
     const body = CreateAdminClientBody.parse(req.body);
-    const [client] = await db
-      .insert(clientsTable)
-      .values({
-        clientId: body.clientId,
-        fullName: body.fullName,
-        phone: body.phone,
-        email: body.email,
-        location: body.location ?? null,
-        notes: body.notes ?? null,
-      })
-      .returning();
+    const client: MongoClientRecord = {
+      _id: newId(), clientId: body.clientId, fullName: body.fullName, phone: body.phone, email: body.email,
+      location: body.location ?? null, notes: body.notes ?? null, status: "active", registeredAt: new Date(),
+    };
+    const db = await mongoDb();
+    await mongoCollection<MongoClientRecord>(db, "clients").insertOne(client);
     res.status(201).json(serializeClient(client, 0));
   } catch (error) {
     logger.error({ err: error }, "Unable to create client");
@@ -310,13 +293,13 @@ router.post("/admin/clients", requireUser, requireAdmin, async (req, res) => {
 
 router.get("/admin/clients/:id", requireUser, requireAdmin, async (req, res) => {
   try {
-    const id = Number(req.params.id);
-    const [client] = await db.select().from(clientsTable).where(eq(clientsTable.id, id)).limit(1);
+    const db = await mongoDb();
+    const client = await mongoCollection<MongoClientRecord>(db, "clients").findOne({ _id: req.params.id });
     if (!client) {
       res.status(404).json({ error: "Client not found" });
       return;
     }
-    const services = await serviceRows(eq(servicesTable.clientId, id));
+    const services = await serviceRows({ clientId: req.params.id });
     res.json({ ...serializeClient(client, services.length), services });
   } catch (error) {
     logger.error({ err: error }, "Unable to load client detail");
@@ -326,19 +309,15 @@ router.get("/admin/clients/:id", requireUser, requireAdmin, async (req, res) => 
 
 router.patch("/admin/clients/:id", requireUser, requireAdmin, async (req, res) => {
   try {
-    const id = Number(req.params.id);
     const body = UpdateAdminClientBody.parse(req.body);
-    const [client] = await db
-      .update(clientsTable)
-      .set(body)
-      .where(eq(clientsTable.id, id))
-      .returning();
-    if (!client) {
+    const db = await mongoDb();
+    const result = await mongoCollection<MongoClientRecord>(db, "clients").findOneAndUpdate({ _id: req.params.id }, { $set: body }, { returnDocument: "after" });
+    if (!result) {
       res.status(404).json({ error: "Client not found" });
       return;
     }
     const counts = await countsByClient();
-    res.json(serializeClient(client, counts.get(client.id) ?? 0));
+    res.json(serializeClient(result, counts.get(result._id) ?? 0));
   } catch (error) {
     logger.error({ err: error }, "Unable to update client");
     res.status(400).json({ error: "Unable to update client" });
@@ -347,10 +326,11 @@ router.patch("/admin/clients/:id", requireUser, requireAdmin, async (req, res) =
 
 router.delete("/admin/clients/:id", requireUser, requireAdmin, async (req, res) => {
   try {
-    const id = Number(req.params.id);
-    await db.delete(servicesTable).where(eq(servicesTable.clientId, id));
-    await db.delete(usersTable).where(eq(usersTable.clientId, id));
-    await db.delete(clientsTable).where(eq(clientsTable.id, id));
+    const db = await mongoDb();
+    await Promise.all([
+      mongoCollection<MongoService>(db, "services").deleteMany({ clientId: req.params.id }),
+      mongoCollection<MongoClientRecord>(db, "clients").deleteOne({ _id: req.params.id }),
+    ]);
     res.status(204).send();
   } catch (error) {
     logger.error({ err: error }, "Unable to delete client");
@@ -360,12 +340,10 @@ router.delete("/admin/clients/:id", requireUser, requireAdmin, async (req, res) 
 
 router.get("/admin/services", requireUser, requireAdmin, async (req, res) => {
   try {
-    const status = typeof req.query.status === "string" ? req.query.status : undefined;
-    const serviceTypeId = typeof req.query.serviceTypeId === "string" ? Number(req.query.serviceTypeId) : undefined;
-    let services = await serviceRows(serviceTypeId ? eq(servicesTable.serviceTypeId, serviceTypeId) : undefined);
-    if (status === "active" || status === "expiring_soon" || status === "expired") {
-      services = services.filter((service) => service.status === status);
-    }
+    const serviceTypeId = typeof req.query.serviceTypeId === "string" ? req.query.serviceTypeId : "";
+    let services = await serviceRows(serviceTypeId ? { serviceTypeId } : {});
+    const status = typeof req.query.status === "string" ? req.query.status : "";
+    if (["active", "expiring_soon", "expired"].includes(status)) services = services.filter((service) => service.status === status);
     res.json(services);
   } catch (error) {
     logger.error({ err: error }, "Unable to list services");
@@ -376,19 +354,13 @@ router.get("/admin/services", requireUser, requireAdmin, async (req, res) => {
 router.post("/admin/services", requireUser, requireAdmin, async (req, res) => {
   try {
     const body = CreateAdminServiceBody.parse(req.body);
-    const [service] = await db
-      .insert(servicesTable)
-      .values({
-        clientId: Number(body.clientId),
-        serviceTypeId: Number(body.serviceTypeId),
-        serviceName: body.serviceName,
-        startDate: dateForDb(body.startDate),
-        endDate: dateForDb(body.endDate),
-        price: body.price === null || body.price === undefined ? null : String(body.price),
-        notes: body.notes ?? null,
-      })
-      .returning();
-    const [serialized] = await serviceRows(eq(servicesTable.id, service.id));
+    const service: MongoService = {
+      _id: newId(), clientId: body.clientId, serviceTypeId: body.serviceTypeId, serviceName: body.serviceName,
+      startDate: dateForDb(body.startDate), endDate: dateForDb(body.endDate), price: body.price ?? null, notes: body.notes ?? null,
+    };
+    const db = await mongoDb();
+    await mongoCollection<MongoService>(db, "services").insertOne(service);
+    const [serialized] = await serviceRows({ _id: service._id });
     res.status(201).json(serialized);
   } catch (error) {
     logger.error({ err: error }, "Unable to create service");
@@ -398,25 +370,21 @@ router.post("/admin/services", requireUser, requireAdmin, async (req, res) => {
 
 router.patch("/admin/services/:id", requireUser, requireAdmin, async (req, res) => {
   try {
-    const id = Number(req.params.id);
     const body = UpdateAdminServiceBody.parse(req.body);
-    const [service] = await db
-      .update(servicesTable)
-      .set({
-        ...(body.serviceTypeId ? { serviceTypeId: Number(body.serviceTypeId) } : {}),
-        ...(body.serviceName ? { serviceName: body.serviceName } : {}),
-        ...(body.startDate ? { startDate: dateForDb(body.startDate) } : {}),
-        ...(body.endDate ? { endDate: dateForDb(body.endDate) } : {}),
-        ...(body.price !== undefined ? { price: body.price === null ? null : String(body.price) } : {}),
-        ...(body.notes !== undefined ? { notes: body.notes } : {}),
-      })
-      .where(eq(servicesTable.id, id))
-      .returning();
-    if (!service) {
+    const updates: Partial<MongoService> = {};
+    if (body.serviceTypeId !== undefined) updates.serviceTypeId = body.serviceTypeId;
+    if (body.serviceName !== undefined) updates.serviceName = body.serviceName;
+    if (body.startDate !== undefined) updates.startDate = dateForDb(body.startDate);
+    if (body.endDate !== undefined) updates.endDate = dateForDb(body.endDate);
+    if (body.price !== undefined) updates.price = body.price;
+    if (body.notes !== undefined) updates.notes = body.notes;
+    const db = await mongoDb();
+    const result = await mongoCollection<MongoService>(db, "services").findOneAndUpdate({ _id: req.params.id }, { $set: updates }, { returnDocument: "after" });
+    if (!result) {
       res.status(404).json({ error: "Service not found" });
       return;
     }
-    const [serialized] = await serviceRows(eq(servicesTable.id, service.id));
+    const [serialized] = await serviceRows({ _id: result._id });
     res.json(serialized);
   } catch (error) {
     logger.error({ err: error }, "Unable to update service");
@@ -426,7 +394,8 @@ router.patch("/admin/services/:id", requireUser, requireAdmin, async (req, res) 
 
 router.delete("/admin/services/:id", requireUser, requireAdmin, async (req, res) => {
   try {
-    await db.delete(servicesTable).where(eq(servicesTable.id, Number(req.params.id)));
+    const db = await mongoDb();
+    await mongoCollection<MongoService>(db, "services").deleteOne({ _id: req.params.id });
     res.status(204).send();
   } catch (error) {
     logger.error({ err: error }, "Unable to delete service");
@@ -436,8 +405,9 @@ router.delete("/admin/services/:id", requireUser, requireAdmin, async (req, res)
 
 router.get("/admin/service-types", requireUser, requireAdmin, async (_req, res) => {
   try {
-    const rows = await db.select().from(serviceTypesTable).orderBy(asc(serviceTypesTable.name));
-    res.json(rows.map((row) => ({ id: String(row.id), name: row.name, description: row.description, active: row.active })));
+    const db = await mongoDb();
+    const rows = await mongoCollection<MongoServiceType>(db, "service_types").find({}).sort({ name: 1 }).toArray();
+    res.json(rows.map((row) => ({ id: row._id, name: row.name, description: row.description, active: row.active })));
   } catch (error) {
     logger.error({ err: error }, "Unable to list service types");
     res.status(500).json({ error: "Unable to list service types" });
@@ -447,8 +417,10 @@ router.get("/admin/service-types", requireUser, requireAdmin, async (_req, res) 
 router.post("/admin/service-types", requireUser, requireAdmin, async (req, res) => {
   try {
     const body = CreateServiceTypeBody.parse(req.body);
-    const [row] = await db.insert(serviceTypesTable).values(body).returning();
-    res.status(201).json({ id: String(row.id), name: row.name, description: row.description, active: row.active });
+    const row: MongoServiceType = { _id: newId(), name: body.name, description: body.description ?? null, active: true };
+    const db = await mongoDb();
+    await mongoCollection<MongoServiceType>(db, "service_types").insertOne(row);
+    res.status(201).json({ id: row._id, name: row.name, description: row.description, active: row.active });
   } catch (error) {
     logger.error({ err: error }, "Unable to create service type");
     res.status(400).json({ error: "Unable to create service type" });
@@ -458,12 +430,13 @@ router.post("/admin/service-types", requireUser, requireAdmin, async (req, res) 
 router.patch("/admin/service-types/:id", requireUser, requireAdmin, async (req, res) => {
   try {
     const body = UpdateServiceTypeBody.parse(req.body);
-    const [row] = await db.update(serviceTypesTable).set(body).where(eq(serviceTypesTable.id, Number(req.params.id))).returning();
-    if (!row) {
+    const db = await mongoDb();
+    const result = await mongoCollection<MongoServiceType>(db, "service_types").findOneAndUpdate({ _id: req.params.id }, { $set: body }, { returnDocument: "after" });
+    if (!result) {
       res.status(404).json({ error: "Service type not found" });
       return;
     }
-    res.json({ id: String(row.id), name: row.name, description: row.description, active: row.active });
+    res.json({ id: result._id, name: result.name, description: result.description, active: result.active });
   } catch (error) {
     logger.error({ err: error }, "Unable to update service type");
     res.status(400).json({ error: "Unable to update service type" });
@@ -472,7 +445,8 @@ router.patch("/admin/service-types/:id", requireUser, requireAdmin, async (req, 
 
 router.delete("/admin/service-types/:id", requireUser, requireAdmin, async (req, res) => {
   try {
-    await db.update(serviceTypesTable).set({ active: false }).where(eq(serviceTypesTable.id, Number(req.params.id)));
+    const db = await mongoDb();
+    await mongoCollection<MongoServiceType>(db, "service_types").updateOne({ _id: req.params.id }, { $set: { active: false } });
     res.status(204).send();
   } catch (error) {
     logger.error({ err: error }, "Unable to deactivate service type");
@@ -482,7 +456,8 @@ router.delete("/admin/service-types/:id", requireUser, requireAdmin, async (req,
 
 router.get("/admin/updates", requireUser, requireAdmin, async (_req, res) => {
   try {
-    const rows = await db.select().from(updatesTable).orderBy(desc(updatesTable.updatedAt));
+    const db = await mongoDb();
+    const rows = await mongoCollection<MongoUpdate>(db, "updates").find({}).sort({ updatedAt: -1 }).toArray();
     res.json(rows.map(serializeUpdate));
   } catch (error) {
     logger.error({ err: error }, "Unable to list updates");
@@ -497,11 +472,14 @@ function makeSlug(title: string): string {
 router.post("/admin/updates", requireUser, requireAdmin, async (req, res) => {
   try {
     const body = CreateAdminUpdateBody.parse(req.body);
-    const publishedAt = body.publishStatus === "published" ? new Date() : null;
-    const [row] = await db
-      .insert(updatesTable)
-      .values({ ...body, slug: makeSlug(body.title), publishedAt })
-      .returning();
+    const now = new Date();
+    const row: MongoUpdate = {
+      _id: newId(), slug: makeSlug(body.title), title: body.title, content: body.content, imageUrl: body.imageUrl ?? null,
+      linkUrl: body.linkUrl ?? null, visibility: body.visibility, publishStatus: body.publishStatus,
+      publishedAt: body.publishStatus === "published" ? now : null, createdAt: now, updatedAt: now,
+    };
+    const db = await mongoDb();
+    await mongoCollection<MongoUpdate>(db, "updates").insertOne(row);
     res.status(201).json(serializeUpdate(row));
   } catch (error) {
     logger.error({ err: error }, "Unable to create update");
@@ -512,26 +490,17 @@ router.post("/admin/updates", requireUser, requireAdmin, async (req, res) => {
 router.patch("/admin/updates/:id", requireUser, requireAdmin, async (req, res) => {
   try {
     const body = UpdateAdminUpdateBody.parse(req.body);
-    const [existing] = await db.select().from(updatesTable).where(eq(updatesTable.id, Number(req.params.id))).limit(1);
+    const db = await mongoDb();
+    const updates: Partial<MongoUpdate> = { ...body, updatedAt: new Date() };
+    const existing = await mongoCollection<MongoUpdate>(db, "updates").findOne({ _id: req.params.id });
     if (!existing) {
       res.status(404).json({ error: "Update not found" });
       return;
     }
-    const [row] = await db
-      .update(updatesTable)
-      .set({
-        ...body,
-        publishedAt:
-          body.publishStatus === "published"
-            ? existing.publishedAt ?? new Date()
-            : body.publishStatus === "draft"
-              ? null
-              : existing.publishedAt,
-        updatedAt: new Date(),
-      })
-      .where(eq(updatesTable.id, existing.id))
-      .returning();
-    res.json(serializeUpdate(row));
+    if (body.publishStatus === "published") updates.publishedAt = existing.publishedAt ?? new Date();
+    if (body.publishStatus === "draft") updates.publishedAt = null;
+    const row = await mongoCollection<MongoUpdate>(db, "updates").findOneAndUpdate({ _id: req.params.id }, { $set: updates }, { returnDocument: "after" });
+    res.json(serializeUpdate(row!));
   } catch (error) {
     logger.error({ err: error }, "Unable to update announcement");
     res.status(400).json({ error: "Unable to update announcement" });
@@ -540,7 +509,8 @@ router.patch("/admin/updates/:id", requireUser, requireAdmin, async (req, res) =
 
 router.delete("/admin/updates/:id", requireUser, requireAdmin, async (req, res) => {
   try {
-    await db.delete(updatesTable).where(eq(updatesTable.id, Number(req.params.id)));
+    const db = await mongoDb();
+    await mongoCollection<MongoUpdate>(db, "updates").deleteOne({ _id: req.params.id });
     res.status(204).send();
   } catch (error) {
     logger.error({ err: error }, "Unable to delete announcement");
@@ -550,11 +520,8 @@ router.delete("/admin/updates/:id", requireUser, requireAdmin, async (req, res) 
 
 router.get("/updates/:slug", async (req, res) => {
   try {
-    const [row] = await db
-      .select()
-      .from(updatesTable)
-      .where(and(eq(updatesTable.slug, req.params.slug), eq(updatesTable.visibility, "public"), eq(updatesTable.publishStatus, "published")))
-      .limit(1);
+    const db = await mongoDb();
+    const row = await mongoCollection<MongoUpdate>(db, "updates").findOne({ slug: req.params.slug, visibility: "public", publishStatus: "published" });
     if (!row) {
       res.status(404).json({ error: "Update not found" });
       return;
@@ -573,7 +540,7 @@ router.get("/client/services", requireUser, async (req, res) => {
       res.json([]);
       return;
     }
-    res.json(await serviceRows(eq(servicesTable.clientId, user.clientId)));
+    res.json(await serviceRows({ clientId: user.clientId }));
   } catch (error) {
     logger.error({ err: error }, "Unable to list client services");
     res.status(500).json({ error: "Unable to load services" });
@@ -582,11 +549,8 @@ router.get("/client/services", requireUser, async (req, res) => {
 
 router.get("/client/updates", requireUser, async (_req, res) => {
   try {
-    const rows = await db
-      .select()
-      .from(updatesTable)
-      .where(and(eq(updatesTable.publishStatus, "published"), or(eq(updatesTable.visibility, "public"), eq(updatesTable.visibility, "client_only"))))
-      .orderBy(desc(updatesTable.publishedAt));
+    const db = await mongoDb();
+    const rows = await mongoCollection<MongoUpdate>(db, "updates").find({ publishStatus: "published", visibility: { $in: ["public", "client_only"] } }).sort({ publishedAt: -1 }).toArray();
     res.json(rows.map(serializeUpdate));
   } catch (error) {
     logger.error({ err: error }, "Unable to list client updates");
@@ -601,13 +565,14 @@ router.get("/client/profile", requireUser, async (req, res) => {
       res.status(404).json({ error: "Client profile not found" });
       return;
     }
-    const [client] = await db.select().from(clientsTable).where(eq(clientsTable.id, user.clientId)).limit(1);
+    const db = await mongoDb();
+    const client = await mongoCollection<MongoClientRecord>(db, "clients").findOne({ _id: user.clientId });
     if (!client) {
       res.status(404).json({ error: "Client profile not found" });
       return;
     }
     const counts = await countsByClient();
-    res.json(serializeClient(client, counts.get(client.id) ?? 0));
+    res.json(serializeClient(client, counts.get(client._id) ?? 0));
   } catch (error) {
     logger.error({ err: error }, "Unable to load client profile");
     res.status(500).json({ error: "Unable to load profile" });
@@ -622,13 +587,14 @@ router.patch("/client/profile", requireUser, async (req, res) => {
       return;
     }
     const body = UpdateClientProfileBody.parse(req.body);
-    const [client] = await db.update(clientsTable).set(body).where(eq(clientsTable.id, user.clientId)).returning();
+    const db = await mongoDb();
+    const client = await mongoCollection<MongoClientRecord>(db, "clients").findOneAndUpdate({ _id: user.clientId }, { $set: body }, { returnDocument: "after" });
     if (!client) {
       res.status(404).json({ error: "Client profile not found" });
       return;
     }
     const counts = await countsByClient();
-    res.json(serializeClient(client, counts.get(client.id) ?? 0));
+    res.json(serializeClient(client, counts.get(client._id) ?? 0));
   } catch (error) {
     logger.error({ err: error }, "Unable to update client profile");
     res.status(400).json({ error: "Unable to update profile" });
