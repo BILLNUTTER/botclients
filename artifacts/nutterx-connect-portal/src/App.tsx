@@ -318,11 +318,13 @@ function PublicLanding() {
     queryKey: ['public-active-clients'],
     enabled: !adminMode,
     queryFn: async () => {
-      const response = await fetch('/api/public/clients');
+      const response = await fetch('/api/public/clients', { cache: 'no-store' });
       if (!response.ok) throw new Error('Unable to load active clients');
       return response.json() as Promise<{ name: string }[]>;
     },
-    staleTime: 30_000,
+    staleTime: 0,
+    refetchOnMount: 'always',
+    refetchOnWindowFocus: 'always',
   });
   if (adminMode) return <AdminLogin />;
   return <div className="min-h-[100dvh] overflow-hidden bg-background">
@@ -347,8 +349,21 @@ function PublicLanding() {
       </section>
       <section id="active-clients" className="border-y border-border bg-secondary/45 px-5 py-16 sm:px-10 sm:py-20">
         <div className="mx-auto max-w-[1200px]">
-          <div className="mb-8 flex flex-col justify-between gap-3 sm:flex-row sm:items-end"><div><p className="eyebrow">Client directory</p><h2 className="display mt-2 text-3xl font-bold tracking-tight sm:text-4xl">Active clients</h2></div>{clientsQuery.data && <span className="mono text-sm text-muted-foreground">{clientsQuery.data.length} active</span>}</div>
-          {clientsQuery.isLoading ? <PageLoader label="Loading active clients" /> : clientsQuery.isError ? <ErrorState onRetry={() => clientsQuery.refetch()} /> : clientsQuery.data?.length ? <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{clientsQuery.data.map((client, index) => <div key={`${client.name}-${index}`} className="surface flex items-center gap-3 rounded-xl p-4" data-testid={`public-active-client-${index}`}><span className="grid size-10 place-items-center rounded-full bg-accent text-sm font-bold text-primary">{initials(client.name)}</span><span className="font-semibold">{client.name}</span><span className="ml-auto size-2 rounded-full bg-emerald-500" aria-label="Active" /></div>)}</div> : <EmptyState icon={Users} title="No active clients to show" copy="The public client directory will update as active clients are added." />}
+          <div className="mb-8 flex flex-col justify-between gap-3 sm:flex-row sm:items-end">
+            <div>
+              <p className="eyebrow">Client directory</p>
+              <h2 className="display mt-2 text-3xl font-bold tracking-tight sm:text-4xl">Active clients</h2>
+              {clientsQuery.data && <span className="mono mt-2 block text-sm text-muted-foreground">{clientsQuery.data.length} active</span>}
+            </div>
+            <button type="button" onClick={() => clientsQuery.refetch()} disabled={clientsQuery.isFetching} className="btn-secondary self-start disabled:cursor-wait disabled:opacity-60 sm:self-auto" data-testid="button-refresh-active-clients">
+              <RefreshCw size={15} className={clientsQuery.isFetching ? 'animate-spin' : ''} />
+              {clientsQuery.isFetching ? 'Refreshing…' : 'Refresh clients'}
+            </button>
+          </div>
+          {clientsQuery.isLoading && !clientsQuery.data ? <PageLoader label="Loading active clients" />
+            : clientsQuery.data?.length ? <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{clientsQuery.data.map((client, index) => <div key={`${client.name}-${index}`} className="surface flex items-center gap-3 rounded-xl p-4" data-testid={`public-active-client-${index}`}><span className="grid size-10 place-items-center rounded-full bg-accent text-sm font-bold text-primary">{initials(client.name)}</span><span className="font-semibold">{client.name}</span><span className="ml-auto size-2 rounded-full bg-emerald-500" aria-label="Active" /></div>)}</div>
+            : clientsQuery.isError ? <ErrorState onRetry={() => clientsQuery.refetch()} />
+            : <EmptyState icon={Users} title="No active clients to show" copy="The public client directory will update as active clients are added." />}
         </div>
       </section>
     </main>
