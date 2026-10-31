@@ -10,14 +10,16 @@ import { Link, Redirect, Route, Switch, useLocation, useParams, Router as Wouter
 import {
   getGetAdminClientQueryKey, getGetAdminSummaryQueryKey, getGetClientProfileQueryKey,
   getGetCurrentUserQueryKey, getListAdminClientsQueryKey, getListAdminServicesQueryKey,
+  getListPublicClientsQueryKey,
   getListAdminUpdatesQueryKey, useCreateAdminClient,
   useCreateAdminService, useCreateAdminUpdate, useDeleteAdminClient,
   useDeleteAdminService, useDeleteAdminUpdate, useGetAdminClient,
   useGetAdminSummary, useGetClientProfile, useGetCurrentUser, useGetPublicUpdate,
   useListAdminClients, useListAdminServices, useListAdminUpdates, useListClientServices,
+  useListPublicClients, useLookupPublicClientAccount,
   useListClientUpdates, useUpdateAdminClient, useUpdateAdminService,
   useUpdateAdminUpdate, useUpdateClientProfile,
-  type AdminSummary, type Client, type CurrentUser, type Service,
+  type AdminSummary, type Client, type CurrentUser, type PublicClientAccount, type Service,
 } from '@workspace/api-client-react';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { Toaster } from '@/components/ui/toaster';
@@ -97,7 +99,7 @@ function Modal({ title, onClose, children }: { title: string; onClose: () => voi
 }
 
 function Field({ label, value, onChange, type = 'text', placeholder, required = false, autoComplete, min, step }: { label: string; value: string; onChange: (v: string) => void; type?: string; placeholder?: string; required?: boolean; autoComplete?: string; min?: number; step?: number }) {
-  return <label className="grid gap-1.5 text-sm font-medium">{label}{required && <span className="text-primary"> *</span>}<input required={required} type={type} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} autoComplete={autoComplete} min={min} step={step} className="input" data-testid={`input-${label.toLowerCase().replaceAll(' ', '-')}`} /></label>;
+  return <label className="grid gap-1.5 text-sm font-medium"><span>{label}{required && <span className="ml-1 text-primary">*</span>}</span><input required={required} type={type} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} autoComplete={autoComplete} min={min} step={step} className="input" data-testid={`input-${label.toLowerCase().replaceAll(' ', '-')}`} /></label>;
 }
 
 function TextareaField({ label, value, onChange, placeholder }: { label: string; value: string; onChange: (v: string) => void; placeholder?: string }) {
@@ -194,7 +196,7 @@ function AdminClients() {
     qc.invalidateQueries({ queryKey: getListAdminClientsQueryKey() });
     qc.invalidateQueries({ queryKey: getListAdminServicesQueryKey() });
     qc.invalidateQueries({ queryKey: getGetAdminSummaryQueryKey() });
-    qc.invalidateQueries({ queryKey: ['public-active-clients'] });
+    qc.invalidateQueries({ queryKey: getListPublicClientsQueryKey() });
   } }); };
   if (query.isLoading) return <PageLoader />;
   if (query.isError) return <ErrorState onRetry={() => query.refetch()} />;
@@ -205,16 +207,18 @@ function AdminClients() {
       qc.invalidateQueries({ queryKey: getListAdminClientsQueryKey() });
       qc.invalidateQueries({ queryKey: getListAdminServicesQueryKey() });
       qc.invalidateQueries({ queryKey: getGetAdminSummaryQueryKey() });
-      qc.invalidateQueries({ queryKey: ['public-active-clients'] });
+      qc.invalidateQueries({ queryKey: getListPublicClientsQueryKey() });
     }} />}
   </PortalPage>;
 }
 
 function ClientForm({ onClose, onDone, initial }: { onClose: () => void; onDone: () => void; initial?: Client }) {
-  const mutation = useCreateAdminClient(); const update = useUpdateAdminClient();
+  const mutation = useCreateAdminClient(); const update = useUpdateAdminClient(); const servicesQuery = useListAdminServices();
+  const serviceOptions = useMemo(() => Array.from(new Set((servicesQuery.data || []).map((item) => item.serviceName.trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b)), [servicesQuery.data]);
   const [name, setName] = useState(initial?.fullName || '');
   const [phone, setPhone] = useState(initial?.phone || '');
-  const [service, setService] = useState('');
+  const [serviceSelection, setServiceSelection] = useState('');
+  const [newServiceName, setNewServiceName] = useState('');
   const [amountPaid, setAmountPaid] = useState('');
   const [serviceExpiry, setServiceExpiry] = useState('');
   const submit = (e: FormEvent) => {
@@ -222,8 +226,9 @@ function ClientForm({ onClose, onDone, initial }: { onClose: () => void; onDone:
     if (initial) {
       update.mutate({ id: initial.id, data: { fullName: name, phone } }, { onSuccess: onDone });
     } else {
+      const serviceName = serviceSelection === '__add_new_service__' ? newServiceName.trim() : serviceSelection;
       mutation.mutate({
-        data: { fullName: name, phone, serviceName: service, amountPaid: Number(amountPaid), serviceExpiry },
+        data: { fullName: name, phone, serviceName, amountPaid: Number(amountPaid), serviceExpiry },
       }, { onSuccess: onDone });
     }
   };
@@ -232,7 +237,8 @@ function ClientForm({ onClose, onDone, initial }: { onClose: () => void; onDone:
     <Field label="Phone number" value={phone} onChange={setPhone} type="tel" placeholder="+254 ..." required autoComplete="tel" />
     {!initial && <>
       <Field label="Amount paid (KES)" value={amountPaid} onChange={setAmountPaid} type="number" min={0} step={0.01} required />
-      <Field label="Service" value={service} onChange={setService} required />
+      <label className="grid gap-1.5 text-sm font-medium"><span>Service <span className="ml-1 text-primary">*</span></span><select required value={serviceSelection} onChange={(e) => setServiceSelection(e.target.value)} className="input" data-testid="select-client-service"><option value="">Choose a service</option>{serviceOptions.map((serviceName) => <option key={serviceName} value={serviceName}>{serviceName}</option>)}<option value="__add_new_service__">Add a new service…</option></select></label>
+      {serviceSelection === '__add_new_service__' && <Field label="New service name" value={newServiceName} onChange={setNewServiceName} required />}
       <Field label="Service expiry" value={serviceExpiry} onChange={setServiceExpiry} type="date" required />
     </>}
     <div className="mt-2 flex justify-end gap-2"><button type="button" onClick={onClose} className="btn-secondary" data-testid="button-cancel-client">Cancel</button><button disabled={mutation.isPending || update.isPending} className="btn-primary" data-testid="button-save-client">{mutation.isPending || update.isPending ? 'Saving…' : initial ? 'Save changes' : 'Register client'}</button></div>
@@ -254,7 +260,7 @@ function AdminClientDetail() {
       setEdit(false);
       qc.invalidateQueries({ queryKey: getGetAdminClientQueryKey(id) });
       qc.invalidateQueries({ queryKey: getListAdminClientsQueryKey() });
-      qc.invalidateQueries({ queryKey: ['public-active-clients'] });
+      qc.invalidateQueries({ queryKey: getListPublicClientsQueryKey() });
     }} />}{serviceOpen && <ServiceForm clientId={client.id} clientName={client.fullName} onClose={() => setServiceOpen(false)} onDone={() => { setServiceOpen(false); refreshServiceViews(); }} />}
   </PortalPage>;
 }
@@ -314,18 +320,23 @@ function Landing() { const { isSignedIn } = useAuth(); if (new URLSearchParams(w
 
 function PublicLanding() {
   const adminMode = new URLSearchParams(window.location.search).get('admin') === 'true';
-  const clientsQuery = useQuery<{ name: string }[]>({
-    queryKey: ['public-active-clients'],
-    enabled: !adminMode,
-    queryFn: async () => {
-      const response = await fetch('/api/public/clients', { cache: 'no-store' });
-      if (!response.ok) throw new Error('Unable to load active clients');
-      return response.json() as Promise<{ name: string }[]>;
+  const clientsQuery = useListPublicClients({
+    query: {
+      queryKey: getListPublicClientsQueryKey(),
+      enabled: !adminMode,
+      staleTime: 0,
+      refetchOnMount: 'always',
+      refetchOnWindowFocus: 'always',
     },
-    staleTime: 0,
-    refetchOnMount: 'always',
-    refetchOnWindowFocus: 'always',
+    request: { cache: 'no-store' },
   });
+  const lookupMutation = useLookupPublicClientAccount();
+  const [selectedName, setSelectedName] = useState('');
+  const [registeredPhone, setRegisteredPhone] = useState('');
+  const clientNames = useMemo(
+    () => Array.from(new Set((clientsQuery.data || []).map((client) => client.name.trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b)),
+    [clientsQuery.data],
+  );
   if (adminMode) return <AdminLogin />;
   return <div className="min-h-[100dvh] overflow-hidden bg-background">
     <header className="flex h-[76px] items-center justify-between px-5 sm:px-10">
@@ -360,14 +371,59 @@ function PublicLanding() {
               {clientsQuery.isFetching ? 'Refreshing…' : 'Refresh clients'}
             </button>
           </div>
-          {clientsQuery.isLoading && !clientsQuery.data ? <PageLoader label="Loading active clients" />
-            : clientsQuery.data?.length ? <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{clientsQuery.data.map((client, index) => <div key={`${client.name}-${index}`} className="surface flex items-center gap-3 rounded-xl p-4" data-testid={`public-active-client-${index}`}><span className="grid size-10 place-items-center rounded-full bg-accent text-sm font-bold text-primary">{initials(client.name)}</span><span className="font-semibold">{client.name}</span><span className="ml-auto size-2 rounded-full bg-emerald-500" aria-label="Active" /></div>)}</div>
-            : clientsQuery.isError ? <ErrorState onRetry={() => clientsQuery.refetch()} />
-            : <EmptyState icon={Users} title="No active clients to show" copy="The public client directory will update as active clients are added." />}
+          <div className="grid items-start gap-7 lg:grid-cols-[minmax(300px,.82fr)_minmax(0,1.18fr)]">
+            <section className="surface rounded-2xl p-5 sm:p-6">
+              <p className="eyebrow">Account access</p>
+              <h3 className="display mt-2 text-2xl font-bold">View your account</h3>
+              <p className="mt-2 text-sm leading-relaxed text-muted-foreground">Choose your registered name and enter the phone number on your account to see your services and expiry dates.</p>
+              <form onSubmit={(event) => {
+                event.preventDefault();
+                lookupMutation.reset();
+                lookupMutation.mutate({ data: { fullName: selectedName, phone: registeredPhone } });
+              }} className="mt-5 grid gap-4">
+                <label className="grid gap-1.5 text-sm font-medium"><span>Client name <span className="ml-1 text-primary">*</span></span>
+                  <select required value={selectedName} onChange={(event) => { setSelectedName(event.target.value); lookupMutation.reset(); }} className="input" data-testid="select-account-client">
+                    <option value="">Select your name</option>
+                    {clientNames.map((name) => <option key={name} value={name}>{name}</option>)}
+                  </select>
+                </label>
+                <Field label="Registered phone number" value={registeredPhone} onChange={(value) => { setRegisteredPhone(value); lookupMutation.reset(); }} type="tel" placeholder="+254 ..." required autoComplete="tel" />
+                <button type="submit" disabled={lookupMutation.isPending || !clientNames.length} className="btn-primary justify-center disabled:cursor-wait disabled:opacity-60" data-testid="button-lookup-account">
+                  {lookupMutation.isPending ? 'Checking account…' : 'View account details'} <ArrowRight size={15} />
+                </button>
+              </form>
+              {lookupMutation.isError && <p role="alert" className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-700">We could not verify those details. Check your registered name and phone number, then try again.</p>}
+              {lookupMutation.data && <PublicAccountDetails account={lookupMutation.data} />}
+            </section>
+            <div>
+              <div className="mb-4"><p className="eyebrow">Public directory</p><h3 className="display mt-1 text-xl font-bold">Select your registered name</h3></div>
+              {clientsQuery.isLoading && !clientsQuery.data ? <div className="surface rounded-2xl p-5 text-sm text-muted-foreground">Loading active clients…</div>
+                : clientsQuery.data?.length ? <div className="grid gap-3 sm:grid-cols-2">{clientsQuery.data.map((client, index) => <div key={`${client.name}-${index}`} className="surface flex items-center gap-3 rounded-xl p-4" data-testid={`public-active-client-${index}`}><span className="grid size-10 place-items-center rounded-full bg-accent text-sm font-bold text-primary">{initials(client.name)}</span><span className="font-semibold">{client.name}</span><span className="ml-auto size-2 rounded-full bg-emerald-500" aria-label="Active" /></div>)}</div>
+                : clientsQuery.isError ? <ErrorState onRetry={() => clientsQuery.refetch()} />
+                : <EmptyState icon={Users} title="No active clients to show" copy="The public client directory will update as active clients are added." />}
+            </div>
+          </div>
         </div>
       </section>
     </main>
     <footer className="border-t border-border px-5 py-7 sm:px-10"><div className="mx-auto flex max-w-[1440px] flex-col justify-between gap-3 text-xs text-muted-foreground sm:flex-row"><span className="display font-bold uppercase tracking-[-.03em] text-foreground">Nutterx Connect</span><span>Reliable service, close to home.</span></div></footer>
+  </div>;
+}
+
+function PublicAccountDetails({ account }: { account: PublicClientAccount }) {
+  return <div className="mt-6 border-t border-border pt-5" aria-live="polite" data-testid="public-account-details">
+    <div className="mb-4"><p className="eyebrow">Verified account</p><h4 className="display mt-1 text-lg font-bold">{account.fullName}</h4></div>
+    {account.services.length ? <div className="grid gap-3">{account.services.map((service, index) => (
+      <div key={`${service.serviceName}-${service.endDate}-${index}`} className="rounded-xl border border-border bg-background p-4">
+        <div className="flex flex-wrap items-center justify-between gap-2"><h5 className="font-bold">{service.serviceName}</h5><StatusPill status={service.status} /></div>
+        <div className="mt-4 grid gap-3 border-t border-border pt-3 sm:grid-cols-2">
+          <InfoLine label="Amount paid" value={service.amountPaid === null ? '—' : `KES ${service.amountPaid.toLocaleString('en-KE')}`} />
+          <InfoLine label="Started" value={formatDate(service.startDate)} />
+          <InfoLine label="Expires" value={formatDate(service.endDate)} />
+          <InfoLine label="Time remaining" value={service.daysRemaining === null ? 'Past expiry' : service.daysRemaining === 0 ? 'Expires today' : `${service.daysRemaining} days`} />
+        </div>
+      </div>
+    ))}</div> : <p className="rounded-xl bg-accent/60 p-4 text-sm text-muted-foreground">No service records are currently attached to this account.</p>}
   </div>;
 }
 

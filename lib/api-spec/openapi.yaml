@@ -17,7 +17,7 @@ tags:
   - name: client
     description: Client portal operations
   - name: public
-    description: Public shareable announcements
+    description: Public portal and shareable announcements
 paths:
   /healthz:
     get:
@@ -340,6 +340,68 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Update"
+  /public/clients:
+    get:
+      operationId: listPublicClients
+      tags: [public]
+      summary: List active client names for the public directory
+      responses:
+        "200":
+          description: Active client names
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PublicClientName"
+        "503":
+          description: Active client list is temporarily unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /public/client-account:
+    post:
+      operationId: lookupPublicClientAccount
+      tags: [public]
+      summary: Verify an active client with their name and registered phone
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PublicClientAccountLookup"
+      responses:
+        "200":
+          description: Verified account services and expiry details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PublicClientAccount"
+        "400":
+          description: Invalid lookup details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Name and phone did not match an active client
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          description: Too many lookup attempts
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: Account lookup is temporarily unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /client/services:
     get:
       operationId: listClientServices
@@ -435,6 +497,37 @@ components:
         error:
           type: string
       required: [error]
+    PublicClientName:
+      type: object
+      properties:
+        name: { type: string }
+      required: [name]
+    PublicClientAccountLookup:
+      type: object
+      properties:
+        fullName: { type: string, minLength: 2 }
+        phone: { type: string, minLength: 5 }
+      required: [fullName, phone]
+    PublicClientAccountService:
+      type: object
+      properties:
+        serviceName: { type: string }
+        startDate: { type: string, format: date }
+        endDate: { type: string, format: date }
+        amountPaid: { type: ["number", "null"] }
+        status:
+          $ref: "#/components/schemas/ServiceStatus"
+        daysRemaining: { type: ["integer", "null"] }
+      required: [serviceName, startDate, endDate, amountPaid, status, daysRemaining]
+    PublicClientAccount:
+      type: object
+      properties:
+        fullName: { type: string }
+        services:
+          type: array
+          items:
+            $ref: "#/components/schemas/PublicClientAccountService"
+      required: [fullName, services]
     CurrentUser:
       type: object
       properties:

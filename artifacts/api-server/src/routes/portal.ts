@@ -6,6 +6,9 @@ import {
   CreateAdminServiceBody,
   CreateAdminUpdateBody,
   CreateServiceTypeBody,
+  ListPublicClientsResponse,
+  LookupPublicClientAccountBody,
+  LookupPublicClientAccountResponse,
   UpdateAdminClientBody,
   UpdateAdminServiceBody,
   UpdateAdminUpdateBody,
@@ -162,6 +165,20 @@ function safeEqual(left: string, right: string): boolean {
 }
 
 const loginAttempts = new Map<string, { count: number; resetAt: number }>();
+const publicLookupFailures = new Map<string, { count: number; resetAt: number }>();
+
+function normalizeClientName(value: string): string {
+  return value.trim().replace(/\s+/g, " ").toLocaleLowerCase("en");
+}
+
+function normalizeClientPhone(value: string): string {
+  const digits = value.replace(/\D/g, "");
+  return digits.startsWith("254") ? `0${digits.slice(3)}` : digits;
+}
+
+function publicLookupKey(ip: string, fullName: string): string {
+  return `${ip}:${normalizeClientName(fullName)}`;
+}
 
 router.post("/admin/login", (req, res) => {
   const ip = req.ip || "unknown";
@@ -190,16 +207,81 @@ router.post("/admin/login", (req, res) => {
 });
 
 router.get("/public/clients", async (_req, res) => {
+  res.set("Cache-Control", "no-store");
   try {
     const db = await mongoDb();
     const clients = await mongoCollection<MongoClientRecord>(db, "clients")
       .find({ status: "active" }, { projection: { fullName: 1, _id: 0 } })
       .sort({ fullName: 1 })
       .toArray();
-    res.json(clients.map((client) => ({ name: client.fullName })));
+    res.json(ListPublicClientsResponse.parse(clients.map((client) => ({ name: client.fullName }))));
   } catch (error) {
     logger.error({ err: error }, "Unable to list public active clients");
     res.status(503).json({ error: "Active client list is temporarily unavailable" });
+  }
+});
+
+router.post("/public/client-account", async (req, res): Promise<void> => {
+  res.set("Cache-Control", "private, no-store");
+  const parsed = LookupPublicClientAccountBody.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Enter the selected name and registered phone number." });
+    return;
+  }
+
+  const fullName = parsed.data.fullName.trim().replace(/\s+/g, " ");
+  const phone = normalizeClientPhone(parsed.data.phone);
+  if (!/^\d{7,15}$/.test(phone)) {
+    res.status(400).json({ error: "Enter the selected name and registered phone number." });
+    return;
+  }
+
+  const key = publicLookupKey(req.ip || "unknown", fullName);
+  const now = Date.now();
+  const failures = publicLookupFailures.get(key);
+  if (failures && failures.resetAt > now && failures.count >= 8) {
+    res.status(429).json({ error: "Too many attempts. Try again in 15 minutes." });
+    return;
+  }
+
+  try {
+    const db = await mongoDb();
+    const clients = await mongoCollection<MongoClientRecord>(db, "clients")
+      .find({ status: "active" }, { projection: { fullName: 1, phone: 1 } })
+      .toArray();
+    const client = clients.find((candidate) =>
+      normalizeClientName(candidate.fullName) === normalizeClientName(fullName) &&
+      normalizeClientPhone(candidate.phone) === phone
+    );
+
+    if (!client) {
+      const current = publicLookupFailures.get(key);
+      publicLookupFailures.set(
+        key,
+        current && current.resetAt > now
+          ? { ...current, count: current.count + 1 }
+          : { count: 1, resetAt: now + 15 * 60 * 1000 },
+      );
+      res.status(401).json({ error: "We could not verify those account details." });
+      return;
+    }
+
+    publicLookupFailures.delete(key);
+    const services = await serviceRows({ clientId: client._id });
+    res.json(LookupPublicClientAccountResponse.parse({
+      fullName: client.fullName,
+      services: services.map((service) => ({
+        serviceName: service.serviceName,
+        startDate: service.startDate,
+        endDate: service.endDate,
+        amountPaid: service.price,
+        status: service.status,
+        daysRemaining: service.daysRemaining,
+      })),
+    }));
+  } catch (error) {
+    logger.error({ err: error }, "Unable to verify public client account");
+    res.status(503).json({ error: "Account details are temporarily unavailable." });
   }
 });
 

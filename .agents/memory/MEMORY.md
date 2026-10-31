@@ -1,2 +1,2 @@
-- [Portal access model](portal-access.md) — active-client names must refresh for visitors; admin access stays hidden behind `?admin=true` and a key, with no client sign-in.
-- [Client registration fields](client-registration.md) — registration collects only name, phone, amount paid, service, and service expiry; do not add service types.
+- [Portal access model](portal-access.md) — public names refresh; clients verify with name + phone for service details, while admin stays behind `?admin=true`.
+- [Client registration fields](client-registration.md) — registration collects name, phone, amount, service, and expiry; choose a service from the dropdown, not a service type.

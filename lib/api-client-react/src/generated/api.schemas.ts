@@ -13,6 +13,42 @@ export interface Error {
   error: string;
 }
 
+export interface PublicClientName {
+  name: string;
+}
+
+export interface PublicClientAccountLookup {
+  /** @minLength 2 */
+  fullName: string;
+  /** @minLength 5 */
+  phone: string;
+}
+
+export type ServiceStatus = typeof ServiceStatus[keyof typeof ServiceStatus];
+
+
+export const ServiceStatus = {
+  active: 'active',
+  expiring_soon: 'expiring_soon',
+  expired: 'expired',
+} as const;
+
+export interface PublicClientAccountService {
+  serviceName: string;
+  startDate: string;
+  endDate: string;
+  /** @nullable */
+  amountPaid: number | null;
+  status: ServiceStatus;
+  /** @nullable */
+  daysRemaining: number | null;
+}
+
+export interface PublicClientAccount {
+  fullName: string;
+  services: PublicClientAccountService[];
+}
+
 export type CurrentUserRole = typeof CurrentUserRole[keyof typeof CurrentUserRole];
 
 
@@ -29,15 +65,6 @@ export interface CurrentUser {
   /** @nullable */
   clientId: string | null;
 }
-
-export type ServiceStatus = typeof ServiceStatus[keyof typeof ServiceStatus];
-
-
-export const ServiceStatus = {
-  active: 'active',
-  expiring_soon: 'expiring_soon',
-  expired: 'expired',
-} as const;
 
 export type ClientStatus = typeof ClientStatus[keyof typeof ClientStatus];
 

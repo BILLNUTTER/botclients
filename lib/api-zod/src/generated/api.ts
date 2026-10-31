@@ -508,6 +508,42 @@ export const GetPublicUpdateResponse = zod.object({
 
 
 /**
+ * @summary List active client names for the public directory
+ */
+export const ListPublicClientsResponseItem = zod.object({
+  "name": zod.string()
+})
+export const ListPublicClientsResponse = zod.array(ListPublicClientsResponseItem)
+
+
+/**
+ * @summary Verify an active client with their name and registered phone
+ */
+export const lookupPublicClientAccountBodyFullNameMin = 2;
+
+export const lookupPublicClientAccountBodyPhoneMin = 5;
+
+
+
+export const LookupPublicClientAccountBody = zod.object({
+  "fullName": zod.string().min(lookupPublicClientAccountBodyFullNameMin),
+  "phone": zod.string().min(lookupPublicClientAccountBodyPhoneMin)
+})
+
+export const LookupPublicClientAccountResponse = zod.object({
+  "fullName": zod.string(),
+  "services": zod.array(zod.object({
+  "serviceName": zod.string(),
+  "startDate": zod.coerce.date(),
+  "endDate": zod.coerce.date(),
+  "amountPaid": zod.number().nullable(),
+  "status": zod.enum(['active', 'expiring_soon', 'expired']),
+  "daysRemaining": zod.number().int().nullable()
+}))
+})
+
+
+/**
  * @summary List the current client's services
  */
 export const ListClientServicesResponseItem = zod.object({
