@@ -173,6 +173,18 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Service"
+        "404":
+          description: Client or shared service not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Client already has this shared service
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /admin/services/{id}:
     patch:
       operationId: updateAdminService
@@ -202,6 +214,87 @@ paths:
       responses:
         "204":
           description: Service deleted
+  /admin/service-catalog:
+    get:
+      operationId: listAdminServiceCatalog
+      tags: [admin]
+      summary: List shared services once with assignment counts
+      responses:
+        "200":
+          description: Shared service plans
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AdminServicePlan"
+    post:
+      operationId: createAdminServicePlan
+      tags: [admin]
+      summary: Create or reuse a shared service and expiry
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ServicePlanInput"
+      responses:
+        "200":
+          description: Matching shared service reused
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminServicePlan"
+        "201":
+          description: Shared service created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminServicePlan"
+  /admin/service-catalog/{id}:
+    patch:
+      operationId: updateAdminServicePlan
+      tags: [admin]
+      summary: Update a shared service and expiry for all assigned clients
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ServicePlanUpdate"
+      responses:
+        "200":
+          description: Shared service updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminServicePlan"
+        "404":
+          description: Shared service not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: A plan with this name and expiry already exists
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /admin/service-assignments:
+    delete:
+      operationId: clearAdminServiceAssignments
+      tags: [admin]
+      summary: Remove all client service assignments without deleting clients or shared services
+      responses:
+        "200":
+          description: Assignments removed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClearServiceAssignmentsResult"
   /admin/service-types:
     get:
       operationId: listServiceTypes
@@ -581,10 +674,9 @@ components:
       properties:
         fullName: { type: string, minLength: 2 }
         phone: { type: string, minLength: 5 }
-        serviceName: { type: string, minLength: 2 }
+        sharedServiceId: { type: string, minLength: 1 }
         amountPaid: { type: number, minimum: 0 }
-        serviceExpiry: { type: string, format: date }
-      required: [fullName, phone, serviceName, amountPaid, serviceExpiry]
+      required: [fullName, phone, sharedServiceId, amountPaid]
     ClientUpdate:
       type: object
       properties:
@@ -607,6 +699,7 @@ components:
       properties:
         id: { type: string }
         clientId: { type: string }
+        sharedServiceId: { type: string }
         clientName: { type: string }
         serviceTypeId: { type: string }
         serviceTypeName: { type: string }
@@ -618,27 +711,47 @@ components:
           $ref: "#/components/schemas/ServiceStatus"
         daysRemaining: { type: ["integer", "null"] }
         notes: { type: ["string", "null"] }
-      required: [id, clientId, clientName, serviceTypeId, serviceTypeName, serviceName, startDate, endDate, price, status, daysRemaining, notes]
+      required: [id, clientId, sharedServiceId, clientName, serviceTypeId, serviceTypeName, serviceName, startDate, endDate, price, status, daysRemaining, notes]
     ServiceInput:
       type: object
       properties:
         clientId: { type: string }
-        serviceTypeId: { type: string }
-        serviceName: { type: string, minLength: 2 }
-        startDate: { type: string, format: date }
-        endDate: { type: string, format: date }
-        price: { type: ["number", "null"], minimum: 0 }
-        notes: { type: ["string", "null"] }
-      required: [clientId, serviceName, endDate]
+        sharedServiceId: { type: string, minLength: 1 }
+        price: { type: number, minimum: 0 }
+      required: [clientId, sharedServiceId, price]
     ServiceUpdate:
       type: object
       properties:
-        serviceTypeId: { type: string }
-        serviceName: { type: string, minLength: 2 }
-        startDate: { type: string, format: date }
-        endDate: { type: string, format: date }
-        price: { type: ["number", "null"], minimum: 0 }
+        sharedServiceId: { type: string, minLength: 1 }
+        price: { type: number, minimum: 0 }
         notes: { type: ["string", "null"] }
+    AdminServicePlan:
+      type: object
+      properties:
+        id: { type: string }
+        serviceName: { type: string }
+        endDate: { type: string, format: date }
+        status:
+          $ref: "#/components/schemas/ServiceStatus"
+        daysRemaining: { type: ["integer", "null"] }
+        assignedClientCount: { type: integer }
+      required: [id, serviceName, endDate, status, daysRemaining, assignedClientCount]
+    ServicePlanInput:
+      type: object
+      properties:
+        serviceName: { type: string, minLength: 2 }
+        endDate: { type: string, format: date }
+      required: [serviceName, endDate]
+    ServicePlanUpdate:
+      type: object
+      properties:
+        serviceName: { type: string, minLength: 2 }
+        endDate: { type: string, format: date }
+    ClearServiceAssignmentsResult:
+      type: object
+      properties:
+        removedCount: { type: integer }
+      required: [removedCount]
     ServiceType:
       type: object
       properties:

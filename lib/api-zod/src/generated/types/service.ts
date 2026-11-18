@@ -10,6 +10,7 @@ import type { ServiceStatus } from './serviceStatus';
 export interface Service {
   id: string;
   clientId: string;
+  sharedServiceId: string;
   clientName: string;
   serviceTypeId: string;
   serviceTypeName: string;

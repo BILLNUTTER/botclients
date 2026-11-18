@@ -8,16 +8,8 @@
 
 export interface ServiceInput {
   clientId: string;
-  serviceTypeId?: string;
-  /** @minLength 2 */
-  serviceName: string;
-  startDate?: Date;
-  endDate: Date;
-  /**
-     * @minimum 0
-     * @nullable
-     */
-  price?: number | null;
-  /** @nullable */
-  notes?: string | null;
+  /** @minLength 1 */
+  sharedServiceId: string;
+  /** @minimum 0 */
+  price: number;
 }

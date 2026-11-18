@@ -41,6 +41,7 @@ export const GetAdminSummaryResponse = zod.object({
   "service": zod.object({
   "id": zod.string(),
   "clientId": zod.string(),
+  "sharedServiceId": zod.string(),
   "clientName": zod.string(),
   "serviceTypeId": zod.string(),
   "serviceTypeName": zod.string(),
@@ -101,7 +102,6 @@ export const createAdminClientBodyFullNameMin = 2;
 
 export const createAdminClientBodyPhoneMin = 5;
 
-export const createAdminClientBodyServiceNameMin = 2;
 
 export const createAdminClientBodyAmountPaidMin = 0;
 
@@ -110,9 +110,8 @@ export const createAdminClientBodyAmountPaidMin = 0;
 export const CreateAdminClientBody = zod.object({
   "fullName": zod.string().min(createAdminClientBodyFullNameMin),
   "phone": zod.string().min(createAdminClientBodyPhoneMin),
-  "serviceName": zod.string().min(createAdminClientBodyServiceNameMin),
-  "amountPaid": zod.number().min(createAdminClientBodyAmountPaidMin),
-  "serviceExpiry": zod.coerce.date()
+  "sharedServiceId": zod.string().min(1),
+  "amountPaid": zod.number().min(createAdminClientBodyAmountPaidMin)
 })
 
 export const CreateAdminClientResponse = zod.object({
@@ -151,6 +150,7 @@ export const GetAdminClientResponse = zod.object({
   "services": zod.array(zod.object({
   "id": zod.string(),
   "clientId": zod.string(),
+  "sharedServiceId": zod.string(),
   "clientName": zod.string(),
   "serviceTypeId": zod.string(),
   "serviceTypeName": zod.string(),
@@ -222,6 +222,7 @@ export const ListAdminServicesQueryParams = zod.object({
 export const ListAdminServicesResponseItem = zod.object({
   "id": zod.string(),
   "clientId": zod.string(),
+  "sharedServiceId": zod.string(),
   "clientName": zod.string(),
   "serviceTypeId": zod.string(),
   "serviceTypeName": zod.string(),
@@ -239,7 +240,6 @@ export const ListAdminServicesResponse = zod.array(ListAdminServicesResponseItem
 /**
  * @summary Add a service to a client
  */
-export const createAdminServiceBodyServiceNameMin = 2;
 
 export const createAdminServiceBodyPriceMin = 0;
 
@@ -247,17 +247,14 @@ export const createAdminServiceBodyPriceMin = 0;
 
 export const CreateAdminServiceBody = zod.object({
   "clientId": zod.string(),
-  "serviceTypeId": zod.string().optional(),
-  "serviceName": zod.string().min(createAdminServiceBodyServiceNameMin),
-  "startDate": zod.coerce.date().optional(),
-  "endDate": zod.coerce.date(),
-  "price": zod.number().min(createAdminServiceBodyPriceMin).nullish(),
-  "notes": zod.string().nullish()
+  "sharedServiceId": zod.string().min(1),
+  "price": zod.number().min(createAdminServiceBodyPriceMin)
 })
 
 export const CreateAdminServiceResponse = zod.object({
   "id": zod.string(),
   "clientId": zod.string(),
+  "sharedServiceId": zod.string(),
   "clientName": zod.string(),
   "serviceTypeId": zod.string(),
   "serviceTypeName": zod.string(),
@@ -278,24 +275,21 @@ export const UpdateAdminServiceParams = zod.object({
   "id": zod.coerce.string()
 })
 
-export const updateAdminServiceBodyServiceNameMin = 2;
 
 export const updateAdminServiceBodyPriceMin = 0;
 
 
 
 export const UpdateAdminServiceBody = zod.object({
-  "serviceTypeId": zod.string().optional(),
-  "serviceName": zod.string().min(updateAdminServiceBodyServiceNameMin).optional(),
-  "startDate": zod.coerce.date().optional(),
-  "endDate": zod.coerce.date().optional(),
-  "price": zod.number().min(updateAdminServiceBodyPriceMin).nullish(),
+  "sharedServiceId": zod.string().min(1).optional(),
+  "price": zod.number().min(updateAdminServiceBodyPriceMin).optional(),
   "notes": zod.string().nullish()
 })
 
 export const UpdateAdminServiceResponse = zod.object({
   "id": zod.string(),
   "clientId": zod.string(),
+  "sharedServiceId": zod.string(),
   "clientName": zod.string(),
   "serviceTypeId": zod.string(),
   "serviceTypeName": zod.string(),
@@ -317,6 +311,76 @@ export const DeleteAdminServiceParams = zod.object({
 })
 
 export const DeleteAdminServiceResponse = zod.void()
+
+
+/**
+ * @summary List shared services once with assignment counts
+ */
+export const ListAdminServiceCatalogResponseItem = zod.object({
+  "id": zod.string(),
+  "serviceName": zod.string(),
+  "endDate": zod.coerce.date(),
+  "status": zod.enum(['active', 'expiring_soon', 'expired']),
+  "daysRemaining": zod.number().int().nullable(),
+  "assignedClientCount": zod.number().int()
+})
+export const ListAdminServiceCatalogResponse = zod.array(ListAdminServiceCatalogResponseItem)
+
+
+/**
+ * @summary Create or reuse a shared service and expiry
+ */
+export const createAdminServicePlanBodyServiceNameMin = 2;
+
+
+
+export const CreateAdminServicePlanBody = zod.object({
+  "serviceName": zod.string().min(createAdminServicePlanBodyServiceNameMin),
+  "endDate": zod.coerce.date()
+})
+
+export const CreateAdminServicePlanResponse = zod.object({
+  "id": zod.string(),
+  "serviceName": zod.string(),
+  "endDate": zod.coerce.date(),
+  "status": zod.enum(['active', 'expiring_soon', 'expired']),
+  "daysRemaining": zod.number().int().nullable(),
+  "assignedClientCount": zod.number().int()
+})
+
+
+/**
+ * @summary Update a shared service and expiry for all assigned clients
+ */
+export const UpdateAdminServicePlanParams = zod.object({
+  "id": zod.coerce.string()
+})
+
+export const updateAdminServicePlanBodyServiceNameMin = 2;
+
+
+
+export const UpdateAdminServicePlanBody = zod.object({
+  "serviceName": zod.string().min(updateAdminServicePlanBodyServiceNameMin).optional(),
+  "endDate": zod.coerce.date().optional()
+})
+
+export const UpdateAdminServicePlanResponse = zod.object({
+  "id": zod.string(),
+  "serviceName": zod.string(),
+  "endDate": zod.coerce.date(),
+  "status": zod.enum(['active', 'expiring_soon', 'expired']),
+  "daysRemaining": zod.number().int().nullable(),
+  "assignedClientCount": zod.number().int()
+})
+
+
+/**
+ * @summary Remove all client service assignments without deleting clients or shared services
+ */
+export const ClearAdminServiceAssignmentsResponse = zod.object({
+  "removedCount": zod.number().int()
+})
 
 
 /**
@@ -549,6 +613,7 @@ export const LookupPublicClientAccountResponse = zod.object({
 export const ListClientServicesResponseItem = zod.object({
   "id": zod.string(),
   "clientId": zod.string(),
+  "sharedServiceId": zod.string(),
   "clientName": zod.string(),
   "serviceTypeId": zod.string(),
   "serviceTypeName": zod.string(),

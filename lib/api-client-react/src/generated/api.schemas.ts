@@ -108,6 +108,7 @@ export interface Client {
 export interface Service {
   id: string;
   clientId: string;
+  sharedServiceId: string;
   clientName: string;
   serviceTypeId: string;
   serviceTypeName: string;
@@ -132,11 +133,10 @@ export interface ClientInput {
   fullName: string;
   /** @minLength 5 */
   phone: string;
-  /** @minLength 2 */
-  serviceName: string;
+  /** @minLength 1 */
+  sharedServiceId: string;
   /** @minimum 0 */
   amountPaid: number;
-  serviceExpiry: string;
 }
 
 export interface ClientUpdate {
@@ -162,33 +162,45 @@ export interface ProfileUpdate {
 
 export interface ServiceInput {
   clientId: string;
-  serviceTypeId?: string;
-  /** @minLength 2 */
-  serviceName: string;
-  startDate?: string;
-  endDate: string;
-  /**
-     * @minimum 0
-     * @nullable
-     */
-  price?: number | null;
+  /** @minLength 1 */
+  sharedServiceId: string;
+  /** @minimum 0 */
+  price: number;
+}
+
+export interface ServiceUpdate {
+  /** @minLength 1 */
+  sharedServiceId?: string;
+  /** @minimum 0 */
+  price?: number;
   /** @nullable */
   notes?: string | null;
 }
 
-export interface ServiceUpdate {
-  serviceTypeId?: string;
+export interface AdminServicePlan {
+  id: string;
+  serviceName: string;
+  endDate: string;
+  status: ServiceStatus;
+  /** @nullable */
+  daysRemaining: number | null;
+  assignedClientCount: number;
+}
+
+export interface ServicePlanInput {
+  /** @minLength 2 */
+  serviceName: string;
+  endDate: string;
+}
+
+export interface ServicePlanUpdate {
   /** @minLength 2 */
   serviceName?: string;
-  startDate?: string;
   endDate?: string;
-  /**
-     * @minimum 0
-     * @nullable
-     */
-  price?: number | null;
-  /** @nullable */
-  notes?: string | null;
+}
+
+export interface ClearServiceAssignmentsResult {
+  removedCount: number;
 }
 
 export interface ServiceType {

@@ -23,12 +23,22 @@ export type MongoServiceType = {
 export type MongoService = {
   _id: string;
   clientId: string;
-  serviceTypeId: string;
-  serviceName: string;
-  startDate: string;
-  endDate: string;
+  sharedServiceId?: string;
+  serviceTypeId?: string;
+  serviceName?: string;
+  startDate?: string;
+  endDate?: string;
   price: number | null;
-  notes: string | null;
+  notes?: string | null;
+};
+
+export type MongoSharedService = {
+  _id: string;
+  serviceName: string;
+  normalizedName: string;
+  endDate: string;
+  createdAt: Date;
+  updatedAt: Date;
 };
 
 export type MongoUpdate = {

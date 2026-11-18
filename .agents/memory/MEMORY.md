@@ -1,2 +1,2 @@
 - [Portal access model](portal-access.md) — public names refresh; clients verify with name + phone for service details, while admin stays behind `?admin=true`.
-- [Client registration fields](client-registration.md) — registration collects name, phone, amount, service, and expiry; choose a service from the dropdown, not a service type.
+- [Client registration fields](client-registration.md) — clients select a shared service/expiry; keep payment per client and clear assignments without deleting clients.

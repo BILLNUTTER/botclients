@@ -1,16 +1,22 @@
 import { Router, type NextFunction, type Request, type Response } from "express";
-import { type Filter } from "mongodb";
-import { timingSafeEqual } from "node:crypto";
+import { type Db, type Filter } from "mongodb";
+import { createHash, timingSafeEqual } from "node:crypto";
 import {
   CreateAdminClientBody,
   CreateAdminServiceBody,
+  CreateAdminServicePlanBody,
   CreateAdminUpdateBody,
   CreateServiceTypeBody,
+  ClearAdminServiceAssignmentsResponse,
+  CreateAdminServicePlanResponse,
   ListPublicClientsResponse,
+  ListAdminServiceCatalogResponse,
   LookupPublicClientAccountBody,
   LookupPublicClientAccountResponse,
   UpdateAdminClientBody,
   UpdateAdminServiceBody,
+  UpdateAdminServicePlanBody,
+  UpdateAdminServicePlanResponse,
   UpdateAdminUpdateBody,
   UpdateClientProfileBody,
   UpdateServiceTypeBody,
@@ -22,6 +28,7 @@ import {
   signAdminSession,
   verifyAdminSession,
   type MongoClientRecord,
+  type MongoSharedService,
   type MongoService,
   type MongoServiceType,
   type MongoUpdate,
@@ -67,6 +74,89 @@ function statusFor(endDate: string): "active" | "expiring_soon" | "expired" {
   return "active";
 }
 
+function normalizeServiceName(value: string): string {
+  return value.trim().replace(/\s+/g, " ").toLocaleLowerCase("en");
+}
+
+function makeSharedServiceId(serviceName: string, endDate: string): string {
+  const key = `${normalizeServiceName(serviceName)}\u0000${endDate}`;
+  return `shared_${createHash("sha256").update(key).digest("hex")}`;
+}
+
+function isDuplicateKeyError(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && (error as { code?: number }).code === 11000;
+}
+
+let sharedServiceMigration: Promise<void> | null = null;
+
+async function migrateLegacyServices(db: Db): Promise<void> {
+  const assignments = mongoCollection<MongoService>(db, "services");
+  const plans = mongoCollection<MongoSharedService>(db, "service_catalog");
+  await plans.createIndex({ normalizedName: 1, endDate: 1 }, { unique: true, name: "unique_shared_service_expiry" });
+  const legacyRows = await assignments.find({ sharedServiceId: { $exists: false } }).toArray();
+  const groups = new Map<string, { serviceName: string; normalizedName: string; endDate: string; ids: string[] }>();
+
+  for (const row of legacyRows) {
+    const serviceName = row.serviceName?.trim().replace(/\s+/g, " ");
+    if (!serviceName || !row.endDate) continue;
+    const endDate = dateForDb(row.endDate);
+    const normalizedName = normalizeServiceName(serviceName);
+    const key = `${normalizedName}\u0000${endDate}`;
+    const group = groups.get(key) ?? { serviceName, normalizedName, endDate, ids: [] };
+    group.ids.push(row._id);
+    groups.set(key, group);
+  }
+
+  for (const group of groups.values()) {
+    const existing = await plans.findOne({ normalizedName: group.normalizedName, endDate: group.endDate });
+    const id = existing?._id ?? makeSharedServiceId(group.serviceName, group.endDate);
+    const now = new Date();
+    try {
+      await plans.updateOne(
+        { _id: id },
+        {
+          $setOnInsert: {
+            serviceName: group.serviceName,
+            normalizedName: group.normalizedName,
+            endDate: group.endDate,
+            createdAt: now,
+            updatedAt: now,
+          },
+        },
+        { upsert: true },
+      );
+    } catch (error) {
+      if (!isDuplicateKeyError(error)) throw error;
+    }
+    await assignments.updateMany(
+      { _id: { $in: group.ids }, sharedServiceId: { $exists: false } },
+      { $set: { sharedServiceId: id } },
+    );
+  }
+}
+
+async function ensureSharedServiceMigration(db: Db): Promise<void> {
+  if (!sharedServiceMigration) {
+    sharedServiceMigration = migrateLegacyServices(db).catch((error: unknown) => {
+      sharedServiceMigration = null;
+      throw error;
+    });
+  }
+  await sharedServiceMigration;
+}
+
+function serializeSharedService(row: MongoSharedService, assignedClientCount: number) {
+  const remaining = daysUntil(row.endDate);
+  return {
+    id: row._id,
+    serviceName: row.serviceName,
+    endDate: row.endDate,
+    status: statusFor(row.endDate),
+    daysRemaining: remaining < 0 ? null : remaining,
+    assignedClientCount,
+  };
+}
+
 function serializeClient(row: MongoClientRecord, serviceCount: number) {
   return {
     id: row._id,
@@ -100,28 +190,34 @@ function serializeUpdate(row: MongoUpdate) {
 
 async function serviceRows(filter: Filter<MongoService> = {}) {
   const db = await mongoDb();
-  const [services, clients, types] = await Promise.all([
+  await ensureSharedServiceMigration(db);
+  const [services, clients, types, plans] = await Promise.all([
     mongoCollection<MongoService>(db, "services").find(filter).sort({ endDate: 1 }).toArray(),
     mongoCollection<MongoClientRecord>(db, "clients").find({}).toArray(),
     mongoCollection<MongoServiceType>(db, "service_types").find({}).toArray(),
+    mongoCollection<MongoSharedService>(db, "service_catalog").find({}).toArray(),
   ]);
   const clientsById = new Map(clients.map((client) => [client._id, client]));
   const typesById = new Map(types.map((type) => [type._id, type]));
+  const plansById = new Map(plans.map((plan) => [plan._id, plan]));
   return services.map((service) => {
-    const daysRemaining = daysUntil(service.endDate);
+    const plan = service.sharedServiceId ? plansById.get(service.sharedServiceId) : undefined;
+    const endDate = plan?.endDate ?? service.endDate ?? todayEAT();
+    const daysRemaining = daysUntil(endDate);
     return {
       id: service._id,
       clientId: service.clientId,
+      sharedServiceId: service.sharedServiceId ?? "",
       clientName: clientsById.get(service.clientId)?.fullName ?? "Unknown client",
-      serviceTypeId: service.serviceTypeId,
+      serviceTypeId: service.serviceTypeId ?? "",
       serviceTypeName: service.serviceTypeId ? typesById.get(service.serviceTypeId)?.name ?? "Other" : "",
-      serviceName: service.serviceName,
-      startDate: service.startDate,
-      endDate: service.endDate,
-      price: service.price,
-      status: statusFor(service.endDate),
+      serviceName: plan?.serviceName ?? service.serviceName ?? "Service",
+      startDate: service.startDate ?? todayEAT(),
+      endDate,
+      price: service.price ?? null,
+      status: statusFor(endDate),
       daysRemaining: daysRemaining < 0 ? null : daysRemaining,
-      notes: service.notes,
+      notes: service.notes ?? null,
     };
   });
 }
@@ -360,16 +456,22 @@ router.get("/admin/clients", requireUser, requireAdmin, async (req, res) => {
 router.post("/admin/clients", requireUser, requireAdmin, async (req, res) => {
   try {
     const body = CreateAdminClientBody.parse(req.body);
+    const db = await mongoDb();
+    await ensureSharedServiceMigration(db);
+    const plan = await mongoCollection<MongoSharedService>(db, "service_catalog").findOne({ _id: body.sharedServiceId });
+    if (!plan) {
+      res.status(404).json({ error: "Shared service not found" });
+      return;
+    }
     const id = newId();
     const client: MongoClientRecord = {
       _id: id, clientId: `NX-${id.slice(0, 8).toUpperCase()}`, fullName: body.fullName, phone: body.phone, email: "",
       location: null, notes: null, status: "active", registeredAt: new Date(),
     };
     const service: MongoService = {
-      _id: newId(), clientId: id, serviceTypeId: "", serviceName: body.serviceName,
-      startDate: todayEAT(), endDate: dateForDb(body.serviceExpiry), price: body.amountPaid, notes: null,
+      _id: newId(), clientId: id, sharedServiceId: plan._id, serviceTypeId: "",
+      startDate: todayEAT(), price: body.amountPaid, notes: null,
     };
-    const db = await mongoDb();
     await mongoCollection<MongoClientRecord>(db, "clients").insertOne(client);
     try {
       await mongoCollection<MongoService>(db, "services").insertOne(service);
@@ -431,6 +533,130 @@ router.delete("/admin/clients/:id", requireUser, requireAdmin, async (req, res) 
   }
 });
 
+router.get("/admin/service-catalog", requireUser, requireAdmin, async (_req, res) => {
+  try {
+    const db = await mongoDb();
+    await ensureSharedServiceMigration(db);
+    const [plans, assignments] = await Promise.all([
+      mongoCollection<MongoSharedService>(db, "service_catalog").find({}).sort({ serviceName: 1, endDate: 1 }).toArray(),
+      mongoCollection<MongoService>(db, "services").find({ sharedServiceId: { $exists: true } }, { projection: { clientId: 1, sharedServiceId: 1 } }).toArray(),
+    ]);
+    const clientsByPlan = new Map<string, Set<string>>();
+    for (const assignment of assignments) {
+      const planId = assignment.sharedServiceId;
+      if (!planId) continue;
+      const clientIds = clientsByPlan.get(planId) ?? new Set<string>();
+      clientIds.add(assignment.clientId);
+      clientsByPlan.set(planId, clientIds);
+    }
+    res.json(ListAdminServiceCatalogResponse.parse(plans.map((plan) => serializeSharedService(plan, clientsByPlan.get(plan._id)?.size ?? 0))));
+  } catch (error) {
+    logger.error({ err: error }, "Unable to list shared services");
+    res.status(500).json({ error: "Unable to list shared services" });
+  }
+});
+
+router.post("/admin/service-catalog", requireUser, requireAdmin, async (req, res) => {
+  try {
+    const body = CreateAdminServicePlanBody.parse(req.body);
+    const serviceName = body.serviceName.trim().replace(/\s+/g, " ");
+    if (serviceName.length < 2) {
+      res.status(400).json({ error: "Service name must contain at least two characters" });
+      return;
+    }
+    const normalizedName = normalizeServiceName(serviceName);
+    const endDate = dateForDb(body.endDate);
+    const db = await mongoDb();
+    await ensureSharedServiceMigration(db);
+    const plans = mongoCollection<MongoSharedService>(db, "service_catalog");
+    const existing = await plans.findOne({ normalizedName, endDate });
+    if (existing) {
+      const assignedClientCount = await mongoCollection<MongoService>(db, "services").distinct("clientId", { sharedServiceId: existing._id }).then((ids) => ids.length);
+      res.json(CreateAdminServicePlanResponse.parse(serializeSharedService(existing, assignedClientCount)));
+      return;
+    }
+
+    const now = new Date();
+    const planId = newId();
+    try {
+      await plans.updateOne(
+        { _id: planId },
+        { $setOnInsert: { serviceName, normalizedName, endDate, createdAt: now, updatedAt: now } },
+        { upsert: true },
+      );
+    } catch (error) {
+      if (!isDuplicateKeyError(error)) throw error;
+    }
+    const plan = await plans.findOne({ normalizedName, endDate });
+    if (!plan) throw new Error("Shared service was not saved");
+    res.status(201).json(CreateAdminServicePlanResponse.parse(serializeSharedService(plan, 0)));
+  } catch (error) {
+    logger.error({ err: error }, "Unable to create shared service");
+    res.status(400).json({ error: "Unable to create shared service" });
+  }
+});
+
+router.patch("/admin/service-catalog/:id", requireUser, requireAdmin, async (req, res) => {
+  try {
+    const body = UpdateAdminServicePlanBody.parse(req.body);
+    const db = await mongoDb();
+    await ensureSharedServiceMigration(db);
+    const plans = mongoCollection<MongoSharedService>(db, "service_catalog");
+    const current = await plans.findOne({ _id: req.params.id });
+    if (!current) {
+      res.status(404).json({ error: "Shared service not found" });
+      return;
+    }
+    const serviceName = (body.serviceName ?? current.serviceName).trim().replace(/\s+/g, " ");
+    if (serviceName.length < 2) {
+      res.status(400).json({ error: "Service name must contain at least two characters" });
+      return;
+    }
+    const normalizedName = normalizeServiceName(serviceName);
+    const endDate = body.endDate ? dateForDb(body.endDate) : current.endDate;
+    const duplicate = await plans.findOne({ _id: { $ne: current._id }, normalizedName, endDate });
+    if (duplicate) {
+      res.status(409).json({ error: "A shared service with this name and expiry already exists" });
+      return;
+    }
+    let updated: MongoSharedService | null;
+    try {
+      updated = await plans.findOneAndUpdate(
+        { _id: current._id },
+        { $set: { serviceName, normalizedName, endDate, updatedAt: new Date() } },
+        { returnDocument: "after" },
+      );
+    } catch (error) {
+      if (isDuplicateKeyError(error)) {
+        res.status(409).json({ error: "A shared service with this name and expiry already exists" });
+        return;
+      }
+      throw error;
+    }
+    if (!updated) {
+      res.status(404).json({ error: "Shared service not found" });
+      return;
+    }
+    const assignedClientCount = await mongoCollection<MongoService>(db, "services").distinct("clientId", { sharedServiceId: updated._id }).then((ids) => ids.length);
+    res.json(UpdateAdminServicePlanResponse.parse(serializeSharedService(updated, assignedClientCount)));
+  } catch (error) {
+    logger.error({ err: error }, "Unable to update shared service");
+    res.status(400).json({ error: "Unable to update shared service" });
+  }
+});
+
+router.delete("/admin/service-assignments", requireUser, requireAdmin, async (_req, res) => {
+  try {
+    const db = await mongoDb();
+    await ensureSharedServiceMigration(db);
+    const result = await mongoCollection<MongoService>(db, "services").deleteMany({});
+    res.json(ClearAdminServiceAssignmentsResponse.parse({ removedCount: result.deletedCount }));
+  } catch (error) {
+    logger.error({ err: error }, "Unable to clear client service assignments");
+    res.status(500).json({ error: "Unable to clear client service assignments" });
+  }
+});
+
 router.get("/admin/services", requireUser, requireAdmin, async (req, res) => {
   try {
     const serviceTypeId = typeof req.query.serviceTypeId === "string" ? req.query.serviceTypeId : "";
@@ -447,11 +673,25 @@ router.get("/admin/services", requireUser, requireAdmin, async (req, res) => {
 router.post("/admin/services", requireUser, requireAdmin, async (req, res) => {
   try {
     const body = CreateAdminServiceBody.parse(req.body);
-    const service: MongoService = {
-      _id: newId(), clientId: body.clientId, serviceTypeId: body.serviceTypeId ?? "", serviceName: body.serviceName,
-      startDate: body.startDate ? dateForDb(body.startDate) : todayEAT(), endDate: dateForDb(body.endDate), price: body.price ?? null, notes: body.notes ?? null,
-    };
     const db = await mongoDb();
+    await ensureSharedServiceMigration(db);
+    const [client, plan] = await Promise.all([
+      mongoCollection<MongoClientRecord>(db, "clients").findOne({ _id: body.clientId }),
+      mongoCollection<MongoSharedService>(db, "service_catalog").findOne({ _id: body.sharedServiceId }),
+    ]);
+    if (!client || !plan) {
+      res.status(404).json({ error: "Client or shared service not found" });
+      return;
+    }
+    const duplicate = await mongoCollection<MongoService>(db, "services").findOne({ clientId: body.clientId, sharedServiceId: body.sharedServiceId });
+    if (duplicate) {
+      res.status(409).json({ error: "This client already has that shared service" });
+      return;
+    }
+    const service: MongoService = {
+      _id: newId(), clientId: body.clientId, sharedServiceId: plan._id, serviceTypeId: "",
+      startDate: todayEAT(), price: body.price, notes: null,
+    };
     await mongoCollection<MongoService>(db, "services").insertOne(service);
     const [serialized] = await serviceRows({ _id: service._id });
     res.status(201).json(serialized);
@@ -464,14 +704,34 @@ router.post("/admin/services", requireUser, requireAdmin, async (req, res) => {
 router.patch("/admin/services/:id", requireUser, requireAdmin, async (req, res) => {
   try {
     const body = UpdateAdminServiceBody.parse(req.body);
+    const db = await mongoDb();
+    await ensureSharedServiceMigration(db);
+    const assignments = mongoCollection<MongoService>(db, "services");
+    const current = await assignments.findOne({ _id: req.params.id });
+    if (!current) {
+      res.status(404).json({ error: "Service assignment not found" });
+      return;
+    }
     const updates: Partial<MongoService> = {};
-    if (body.serviceTypeId !== undefined) updates.serviceTypeId = body.serviceTypeId;
-    if (body.serviceName !== undefined) updates.serviceName = body.serviceName;
-    if (body.startDate !== undefined) updates.startDate = dateForDb(body.startDate);
-    if (body.endDate !== undefined) updates.endDate = dateForDb(body.endDate);
+    if (body.sharedServiceId !== undefined) {
+      const plan = await mongoCollection<MongoSharedService>(db, "service_catalog").findOne({ _id: body.sharedServiceId });
+      if (!plan) {
+        res.status(404).json({ error: "Shared service not found" });
+        return;
+      }
+      const duplicate = await assignments.findOne({
+        _id: { $ne: current._id },
+        clientId: current.clientId,
+        sharedServiceId: body.sharedServiceId,
+      });
+      if (duplicate) {
+        res.status(409).json({ error: "This client already has that shared service" });
+        return;
+      }
+      updates.sharedServiceId = body.sharedServiceId;
+    }
     if (body.price !== undefined) updates.price = body.price;
     if (body.notes !== undefined) updates.notes = body.notes;
-    const db = await mongoDb();
     const result = await mongoCollection<MongoService>(db, "services").findOneAndUpdate({ _id: req.params.id }, { $set: updates }, { returnDocument: "after" });
     if (!result) {
       res.status(404).json({ error: "Service not found" });

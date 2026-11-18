@@ -9,17 +9,19 @@ import {
 import { Link, Redirect, Route, Switch, useLocation, useParams, Router as WouterRouter } from 'wouter';
 import {
   getGetAdminClientQueryKey, getGetAdminSummaryQueryKey, getGetClientProfileQueryKey,
-  getGetCurrentUserQueryKey, getListAdminClientsQueryKey, getListAdminServicesQueryKey,
+  getGetCurrentUserQueryKey, getListAdminClientsQueryKey, getListAdminServiceCatalogQueryKey,
+  getListAdminServicesQueryKey,
   getListPublicClientsQueryKey,
-  getListAdminUpdatesQueryKey, useCreateAdminClient,
+  getListAdminUpdatesQueryKey, useClearAdminServiceAssignments, useCreateAdminClient,
+  useCreateAdminServicePlan,
   useCreateAdminService, useCreateAdminUpdate, useDeleteAdminClient,
   useDeleteAdminService, useDeleteAdminUpdate, useGetAdminClient,
   useGetAdminSummary, useGetClientProfile, useGetCurrentUser, useGetPublicUpdate,
-  useListAdminClients, useListAdminServices, useListAdminUpdates, useListClientServices,
+  useListAdminClients, useListAdminServiceCatalog, useListAdminUpdates, useListClientServices,
   useListPublicClients, useLookupPublicClientAccount,
   useListClientUpdates, useUpdateAdminClient, useUpdateAdminService,
-  useUpdateAdminUpdate, useUpdateClientProfile,
-  type AdminSummary, type Client, type CurrentUser, type PublicClientAccount, type Service,
+  useUpdateAdminServicePlan, useUpdateAdminUpdate, useUpdateClientProfile,
+  type AdminServicePlan, type AdminSummary, type Client, type CurrentUser, type PublicClientAccount, type Service,
 } from '@workspace/api-client-react';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { Toaster } from '@/components/ui/toaster';
@@ -98,8 +100,8 @@ function Modal({ title, onClose, children }: { title: string; onClose: () => voi
   );
 }
 
-function Field({ label, value, onChange, type = 'text', placeholder, required = false, autoComplete, min, step }: { label: string; value: string; onChange: (v: string) => void; type?: string; placeholder?: string; required?: boolean; autoComplete?: string; min?: number; step?: number }) {
-  return <label className="grid gap-1.5 text-sm font-medium"><span>{label}{required && <span className="ml-1 text-primary">*</span>}</span><input required={required} type={type} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} autoComplete={autoComplete} min={min} step={step} className="input" data-testid={`input-${label.toLowerCase().replaceAll(' ', '-')}`} /></label>;
+function Field({ label, value, onChange, type = 'text', placeholder, required = false, autoComplete, min, minLength, step }: { label: string; value: string; onChange: (v: string) => void; type?: string; placeholder?: string; required?: boolean; autoComplete?: string; min?: number; minLength?: number; step?: number }) {
+  return <label className="grid gap-1.5 text-sm font-medium"><span>{label}{required && <span className="ml-1 text-primary">*</span>}</span><input required={required} type={type} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} autoComplete={autoComplete} min={min} minLength={minLength} step={step} className="input" data-testid={`input-${label.toLowerCase().replaceAll(' ', '-')}`} /></label>;
 }
 
 function TextareaField({ label, value, onChange, placeholder }: { label: string; value: string; onChange: (v: string) => void; placeholder?: string }) {
@@ -195,6 +197,7 @@ function AdminClients() {
   const deleteClient = (id: string) => { if (window.confirm('Remove this client account?')) del.mutate({ id }, { onSuccess: () => {
     qc.invalidateQueries({ queryKey: getListAdminClientsQueryKey() });
     qc.invalidateQueries({ queryKey: getListAdminServicesQueryKey() });
+    qc.invalidateQueries({ queryKey: getListAdminServiceCatalogQueryKey() });
     qc.invalidateQueries({ queryKey: getGetAdminSummaryQueryKey() });
     qc.invalidateQueries({ queryKey: getListPublicClientsQueryKey() });
   } }); };
@@ -206,6 +209,7 @@ function AdminClients() {
       setOpen(false);
       qc.invalidateQueries({ queryKey: getListAdminClientsQueryKey() });
       qc.invalidateQueries({ queryKey: getListAdminServicesQueryKey() });
+      qc.invalidateQueries({ queryKey: getListAdminServiceCatalogQueryKey() });
       qc.invalidateQueries({ queryKey: getGetAdminSummaryQueryKey() });
       qc.invalidateQueries({ queryKey: getListPublicClientsQueryKey() });
     }} />}
@@ -213,22 +217,20 @@ function AdminClients() {
 }
 
 function ClientForm({ onClose, onDone, initial }: { onClose: () => void; onDone: () => void; initial?: Client }) {
-  const mutation = useCreateAdminClient(); const update = useUpdateAdminClient(); const servicesQuery = useListAdminServices();
-  const serviceOptions = useMemo(() => Array.from(new Set((servicesQuery.data || []).map((item) => item.serviceName.trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b)), [servicesQuery.data]);
+  const mutation = useCreateAdminClient(); const update = useUpdateAdminClient(); const plansQuery = useListAdminServiceCatalog();
   const [name, setName] = useState(initial?.fullName || '');
   const [phone, setPhone] = useState(initial?.phone || '');
-  const [serviceSelection, setServiceSelection] = useState('');
-  const [newServiceName, setNewServiceName] = useState('');
+  const [sharedServiceId, setSharedServiceId] = useState('');
   const [amountPaid, setAmountPaid] = useState('');
-  const [serviceExpiry, setServiceExpiry] = useState('');
+  const selectedPlan = plansQuery.data?.find((plan) => plan.id === sharedServiceId);
+  const error = mutation.error ?? update.error;
   const submit = (e: FormEvent) => {
     e.preventDefault();
     if (initial) {
       update.mutate({ id: initial.id, data: { fullName: name, phone } }, { onSuccess: onDone });
-    } else {
-      const serviceName = serviceSelection === '__add_new_service__' ? newServiceName.trim() : serviceSelection;
+    } else if (selectedPlan) {
       mutation.mutate({
-        data: { fullName: name, phone, serviceName, amountPaid: Number(amountPaid), serviceExpiry },
+        data: { fullName: name, phone, sharedServiceId: selectedPlan.id, amountPaid: Number(amountPaid) },
       }, { onSuccess: onDone });
     }
   };
@@ -237,11 +239,12 @@ function ClientForm({ onClose, onDone, initial }: { onClose: () => void; onDone:
     <Field label="Phone number" value={phone} onChange={setPhone} type="tel" placeholder="+254 ..." required autoComplete="tel" />
     {!initial && <>
       <Field label="Amount paid (KES)" value={amountPaid} onChange={setAmountPaid} type="number" min={0} step={0.01} required />
-      <label className="grid gap-1.5 text-sm font-medium"><span>Service <span className="ml-1 text-primary">*</span></span><select required value={serviceSelection} onChange={(e) => setServiceSelection(e.target.value)} className="input" data-testid="select-client-service"><option value="">Choose a service</option>{serviceOptions.map((serviceName) => <option key={serviceName} value={serviceName}>{serviceName}</option>)}<option value="__add_new_service__">Add a new service…</option></select></label>
-      {serviceSelection === '__add_new_service__' && <Field label="New service name" value={newServiceName} onChange={setNewServiceName} required />}
-      <Field label="Service expiry" value={serviceExpiry} onChange={setServiceExpiry} type="date" required />
+      <label className="grid gap-1.5 text-sm font-medium"><span>Service <span className="ml-1 text-primary">*</span></span><select required value={sharedServiceId} onChange={(e) => setSharedServiceId(e.target.value)} className="input" data-testid="select-client-service"><option value="">Choose a shared service</option>{(plansQuery.data || []).map((plan) => <option key={plan.id} value={plan.id}>{plan.serviceName} · expires {formatDate(plan.endDate)}</option>)}</select></label>
+      <label className="grid gap-1.5 text-sm font-medium"><span>Service expiry <span className="ml-1 text-primary">*</span></span><input type="date" value={selectedPlan?.endDate ?? ''} readOnly className="input cursor-not-allowed bg-secondary/50" data-testid="input-service-expiry" /></label>
+      {!plansQuery.isLoading && !plansQuery.data?.length && <p className="text-sm text-muted-foreground">Create a shared service plan from the <Link href="/admin/services" className="font-bold text-primary hover:underline">Services page</Link> before registering this client.</p>}
     </>}
-    <div className="mt-2 flex justify-end gap-2"><button type="button" onClick={onClose} className="btn-secondary" data-testid="button-cancel-client">Cancel</button><button disabled={mutation.isPending || update.isPending} className="btn-primary" data-testid="button-save-client">{mutation.isPending || update.isPending ? 'Saving…' : initial ? 'Save changes' : 'Register client'}</button></div>
+    {error && <p role="alert" className="text-sm text-red-600">{error instanceof Error ? error.message : 'Unable to save this client.'}</p>}
+    <div className="mt-2 flex justify-end gap-2"><button type="button" onClick={onClose} className="btn-secondary" data-testid="button-cancel-client">Cancel</button><button disabled={mutation.isPending || update.isPending || (!initial && (!selectedPlan || plansQuery.isLoading))} className="btn-primary" data-testid="button-save-client">{mutation.isPending || update.isPending ? 'Saving…' : initial ? 'Save changes' : 'Register client'}</button></div>
   </form></Modal>;
 }
 
@@ -252,39 +255,139 @@ function AdminClientDetail() {
   const refreshServiceViews = () => {
     qc.invalidateQueries({ queryKey: getGetAdminClientQueryKey(id) });
     qc.invalidateQueries({ queryKey: getListAdminServicesQueryKey() });
+    qc.invalidateQueries({ queryKey: getListAdminServiceCatalogQueryKey() });
     qc.invalidateQueries({ queryKey: getGetAdminSummaryQueryKey() });
   };
   return <PortalPage eyebrow="Client record" title={client.fullName} copy={`${client.clientId} · Registered ${formatDate(client.registeredAt)}`} action={<div className="flex gap-2"><button onClick={() => setEdit(true)} className="btn-secondary" data-testid="button-edit-client"><Pencil size={15} /> Edit</button><button onClick={() => setServiceOpen(true)} className="btn-primary" data-testid="button-add-service"><Plus size={15} /> Add service</button></div>}>
-    <div className="grid gap-6 xl:grid-cols-[.75fr_1.25fr]"><section className="grid content-start gap-4"><div className="surface rounded-2xl p-5"><div className="flex items-start gap-4"><span className="avatar avatar-lg">{initials(client.fullName)}</span><div><h2 className="display text-xl font-bold">{client.fullName}</h2><p className="mono mt-1 text-xs text-primary">{client.clientId}</p><div className="mt-3"><StatusPill status={client.status} /></div></div></div><div className="mt-6 grid gap-4 border-t border-border pt-5 text-sm"><InfoLine label="Phone number" value={client.phone} /><InfoLine label="Registered" value={formatDate(client.registeredAt)} /></div></div></section><section className="surface rounded-2xl p-5 sm:p-6"><div className="mb-5 flex items-center justify-between"><div><p className="eyebrow">Services</p><h2 className="display mt-1 text-xl font-bold">{client.services.length} services</h2></div><span className="mono text-xs text-muted-foreground">ID {client.id.slice(0, 8)}</span></div>{client.services.length ? <div className="grid gap-3">{client.services.map((service) => <ServiceCard key={service.id} service={service} admin onChange={() => qc.invalidateQueries({ queryKey: getGetAdminClientQueryKey(id) })} />)}</div> : <EmptyState icon={BriefcaseBusiness} title="No services yet" copy="Add the first service to start tracking this account." action={<button onClick={() => setServiceOpen(true)} className="btn-primary" data-testid="button-empty-add-service"><Plus size={15} /> Add service</button>} />}</section></div>
-    {edit && <ClientForm initial={client} onClose={() => setEdit(false)} onDone={() => {
+     <div className="grid gap-6 xl:grid-cols-[.75fr_1.25fr]"><section className="grid content-start gap-4"><div className="surface rounded-2xl p-5"><div className="flex items-start gap-4"><span className="avatar avatar-lg">{initials(client.fullName)}</span><div><h2 className="display text-xl font-bold">{client.fullName}</h2><p className="mono mt-1 text-xs text-primary">{client.clientId}</p><div className="mt-3"><StatusPill status={client.status} /></div></div></div><div className="mt-6 grid gap-4 border-t border-border pt-5 text-sm"><InfoLine label="Phone number" value={client.phone} /><InfoLine label="Registered" value={formatDate(client.registeredAt)} /></div></div></section><section className="surface rounded-2xl p-5 sm:p-6"><div className="mb-5 flex items-center justify-between"><div><p className="eyebrow">Services</p><h2 className="display mt-1 text-xl font-bold">{client.services.length} services</h2></div><span className="mono text-xs text-muted-foreground">ID {client.id.slice(0, 8)}</span></div>{client.services.length ? <div className="grid gap-3">{client.services.map((service) => <ServiceCard key={service.id} service={service} admin onChange={refreshServiceViews} excludeSharedServiceIds={client.services.filter((item) => item.id !== service.id).map((item) => item.sharedServiceId)} />)}</div> : <EmptyState icon={BriefcaseBusiness} title="No services yet" copy="Add the first service to start tracking this account." action={<button onClick={() => setServiceOpen(true)} className="btn-primary" data-testid="button-empty-add-service"><Plus size={15} /> Add service</button>} />}</section></div>
+     {edit && <ClientForm initial={client} onClose={() => setEdit(false)} onDone={() => {
       setEdit(false);
       qc.invalidateQueries({ queryKey: getGetAdminClientQueryKey(id) });
       qc.invalidateQueries({ queryKey: getListAdminClientsQueryKey() });
       qc.invalidateQueries({ queryKey: getListPublicClientsQueryKey() });
-    }} />}{serviceOpen && <ServiceForm clientId={client.id} clientName={client.fullName} onClose={() => setServiceOpen(false)} onDone={() => { setServiceOpen(false); refreshServiceViews(); }} />}
+     }} />}{serviceOpen && <ServiceForm clientId={client.id} clientName={client.fullName} excludeSharedServiceIds={client.services.map((service) => service.sharedServiceId)} onClose={() => setServiceOpen(false)} onDone={() => { setServiceOpen(false); refreshServiceViews(); }} />}
   </PortalPage>;
 }
 
 function InfoLine({ label, value }: { label: string; value: string }) { return <div className="flex justify-between gap-3"><span className="text-muted-foreground">{label}</span><span className="max-w-[65%] text-right font-semibold">{value}</span></div>; }
 
-function ServiceCard({ service, admin = false, onChange }: { service: Service; admin?: boolean; onChange?: () => void }) {
-  const del = useDeleteAdminService(); const update = useUpdateAdminService(); const [edit, setEdit] = useState(false);
-  return <div className="rounded-xl border border-border bg-background p-4 transition hover:border-primary/40" data-testid={`card-service-${service.id}`}><div className="flex items-start gap-3"><span className={`service-mark ${service.status === 'active' ? 'service-mark-green' : service.status === 'expired' ? 'service-mark-red' : ''}`}><Server size={17} /></span><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h3 className="truncate font-bold">{service.serviceName}</h3><StatusPill status={service.status} /></div>{admin && <p className="mt-1 text-xs text-muted-foreground">{service.clientName}</p>}</div>{admin && <div className="flex gap-1"><button onClick={() => setEdit(true)} className="icon-button" aria-label="Edit service" data-testid={`button-edit-service-${service.id}`}><Pencil size={14} /></button><button onClick={() => { if (window.confirm('Remove this service?')) del.mutate({ id: service.id }, { onSuccess: onChange }); }} className="icon-button text-muted-foreground hover:text-red-600" aria-label="Delete service" data-testid={`button-delete-service-${service.id}`}><Trash2 size={14} /></button></div>}</div><div className="mt-4 grid grid-cols-3 gap-3 border-t border-border pt-3"><div><p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Amount paid</p><p className="mt-1 text-sm font-bold">{service.price === null ? '—' : `KES ${service.price.toLocaleString('en-KE')}`}</p></div><div><p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Expiry</p><p className={`mt-1 text-sm font-bold ${service.status === 'expired' ? 'text-red-600' : service.status === 'expiring_soon' ? 'text-primary' : ''}`}>{formatDate(service.endDate)}</p></div><div><p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Remaining</p><p className="mono mt-1 text-sm font-bold">{service.daysRemaining === null ? '—' : service.daysRemaining < 0 ? `${Math.abs(service.daysRemaining)}d overdue` : `${service.daysRemaining} days`}</p></div></div>{edit && <ServiceForm initial={service} clientId={service.clientId} clientName={service.clientName} onClose={() => setEdit(false)} onDone={() => { setEdit(false); onChange?.(); }} />}</div>;
+function ServiceCard({ service, admin = false, onChange, excludeSharedServiceIds }: { service: Service; admin?: boolean; onChange?: () => void; excludeSharedServiceIds?: string[] }) {
+  const del = useDeleteAdminService(); const [edit, setEdit] = useState(false);
+  return <div className="rounded-xl border border-border bg-background p-4 transition hover:border-primary/40" data-testid={`card-service-${service.id}`}>
+    <div className="flex items-start gap-3">
+      <span className={`service-mark ${service.status === 'active' ? 'service-mark-green' : service.status === 'expired' ? 'service-mark-red' : ''}`}><Server size={17} /></span>
+      <div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h3 className="truncate font-bold">{service.serviceName}</h3><StatusPill status={service.status} /></div>{admin && <p className="mt-1 text-xs text-muted-foreground">{service.clientName}</p>}</div>
+      {admin && <div className="flex gap-1">
+        <button onClick={() => setEdit(true)} className="icon-button" aria-label="Edit client service assignment" data-testid={`button-edit-service-${service.id}`}><Pencil size={14} /></button>
+        <button onClick={() => { if (window.confirm('Remove this client’s assignment? The shared service plan and client account will remain.')) del.mutate({ id: service.id }, { onSuccess: onChange }); }} className="icon-button text-muted-foreground hover:text-red-600" aria-label="Remove client service assignment" data-testid={`button-delete-service-${service.id}`}><Trash2 size={14} /></button>
+      </div>}
+    </div>
+    <div className="mt-4 grid grid-cols-3 gap-3 border-t border-border pt-3">
+      <div><p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Amount paid</p><p className="mt-1 text-sm font-bold">{service.price === null ? '—' : `KES ${service.price.toLocaleString('en-KE')}`}</p></div>
+      <div><p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Shared expiry</p><p className={`mt-1 text-sm font-bold ${service.status === 'expired' ? 'text-red-600' : service.status === 'expiring_soon' ? 'text-primary' : ''}`}>{formatDate(service.endDate)}</p></div>
+      <div><p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Remaining</p><p className="mono mt-1 text-sm font-bold">{service.daysRemaining === null ? 'Past expiry' : service.daysRemaining === 0 ? 'Today' : `${service.daysRemaining} days`}</p></div>
+    </div>
+    {edit && <ServiceForm initial={service} clientId={service.clientId} clientName={service.clientName} excludeSharedServiceIds={excludeSharedServiceIds} onClose={() => setEdit(false)} onDone={() => { setEdit(false); onChange?.(); }} />}
+  </div>;
 }
 
-function ServiceForm({ onClose, onDone, clientId, clientName, initial, clients }: { onClose: () => void; onDone: () => void; clientId: string; clientName: string; initial?: Service; clients?: Client[] }) {
-  const create = useCreateAdminService(); const update = useUpdateAdminService();
-  const [selectedClientId, setSelectedClientId] = useState(clientId);
-  const [name, setName] = useState(initial?.serviceName || ''); const [end, setEnd] = useState(initial?.endDate?.slice(0, 10) || ''); const [amountPaid, setAmountPaid] = useState(initial?.price?.toString() || '');
-  const submit = (e: FormEvent) => { e.preventDefault(); const data = { serviceName: name, endDate: end, price: amountPaid ? Number(amountPaid) : null }; if (initial) update.mutate({ id: initial.id, data }, { onSuccess: onDone }); else create.mutate({ data: { ...data, clientId: selectedClientId } }, { onSuccess: onDone }); };
-  return <Modal title={initial ? 'Edit service' : clients ? 'Add a service' : `Add service for ${clientName}`} onClose={onClose}><form onSubmit={submit} className="grid gap-4">{!initial && clients && <label className="grid gap-1.5 text-sm font-medium">Client<select value={selectedClientId} onChange={(e) => setSelectedClientId(e.target.value)} className="input" required data-testid="select-service-client"><option value="">Select a client</option>{clients.map((client) => <option key={client.id} value={client.id}>{client.fullName} · {client.phone}</option>)}</select></label>}<Field label="Service" value={name} onChange={setName} required /><Field label="Amount paid (KES)" value={amountPaid} onChange={setAmountPaid} type="number" min={0} step={0.01} required /><Field label="Service expiry" value={end} onChange={setEnd} type="date" required /><div className="mt-2 flex justify-end gap-2"><button type="button" onClick={onClose} className="btn-secondary" data-testid="button-cancel-service">Cancel</button><button disabled={create.isPending || update.isPending} className="btn-primary" data-testid="button-save-service">{create.isPending || update.isPending ? 'Saving…' : 'Save service'}</button></div></form></Modal>;
+function ServiceForm({ onClose, onDone, clientId, clientName, initial, excludeSharedServiceIds = [] }: { onClose: () => void; onDone: () => void; clientId: string; clientName: string; initial?: Service; excludeSharedServiceIds?: string[] }) {
+  const create = useCreateAdminService(); const update = useUpdateAdminService(); const plansQuery = useListAdminServiceCatalog();
+  const [sharedServiceId, setSharedServiceId] = useState(initial?.sharedServiceId || '');
+  const [amountPaid, setAmountPaid] = useState(initial?.price?.toString() || '');
+  const plans = (plansQuery.data || []).filter((plan) => !excludeSharedServiceIds.includes(plan.id) || plan.id === initial?.sharedServiceId);
+  const selectedPlan = plansQuery.data?.find((plan) => plan.id === sharedServiceId);
+  const error = create.error ?? update.error;
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    const price = Number(amountPaid);
+    if (initial) update.mutate({ id: initial.id, data: { sharedServiceId, price } }, { onSuccess: onDone });
+    else create.mutate({ data: { clientId, sharedServiceId, price } }, { onSuccess: onDone });
+  };
+  return <Modal title={initial ? 'Edit client service' : `Add service for ${clientName}`} onClose={onClose}>
+    <form onSubmit={submit} className="grid gap-4">
+      <label className="grid gap-1.5 text-sm font-medium"><span>Shared service <span className="ml-1 text-primary">*</span></span>
+        <select value={sharedServiceId} onChange={(event) => setSharedServiceId(event.target.value)} className="input" required data-testid="select-shared-service">
+          <option value="">Choose a shared service</option>{plans.map((plan) => <option key={plan.id} value={plan.id}>{plan.serviceName} · expires {formatDate(plan.endDate)}</option>)}
+        </select>
+      </label>
+      <Field label="Amount paid (KES)" value={amountPaid} onChange={setAmountPaid} type="number" min={0} step={0.01} required />
+      <label className="grid gap-1.5 text-sm font-medium"><span>Shared expiry</span><input type="date" value={selectedPlan?.endDate ?? ''} readOnly className="input cursor-not-allowed bg-secondary/50" data-testid="input-shared-expiry" /></label>
+      {selectedPlan && <p className="rounded-xl bg-accent/60 p-3 text-sm text-muted-foreground">The expiry date is shared. Editing it in Services updates every client assigned to this plan.</p>}
+      {!plansQuery.isLoading && !plans.length && <p className="text-sm text-muted-foreground">No unassigned shared service is available. Create one from the <Link href="/admin/services" className="font-bold text-primary hover:underline">Services page</Link>.</p>}
+      {error && <p role="alert" className="text-sm text-red-600">{error instanceof Error ? error.message : 'Unable to save this assignment.'}</p>}
+      <div className="mt-2 flex justify-end gap-2"><button type="button" onClick={onClose} className="btn-secondary" data-testid="button-cancel-service">Cancel</button><button disabled={create.isPending || update.isPending || plansQuery.isLoading || !selectedPlan} className="btn-primary" data-testid="button-save-service">{create.isPending || update.isPending ? 'Saving…' : 'Save assignment'}</button></div>
+    </form>
+  </Modal>;
+}
+
+function SharedServiceForm({ initial, onClose, onDone }: { initial?: AdminServicePlan; onClose: () => void; onDone: () => void }) {
+  const create = useCreateAdminServicePlan();
+  const update = useUpdateAdminServicePlan();
+  const [serviceName, setServiceName] = useState(initial?.serviceName ?? '');
+  const [endDate, setEndDate] = useState(initial?.endDate.slice(0, 10) ?? '');
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    const data = { serviceName: serviceName.trim(), endDate };
+    if (initial) update.mutate({ id: initial.id, data }, { onSuccess: onDone });
+    else create.mutate({ data }, { onSuccess: onDone });
+  };
+  const error = create.error ?? update.error;
+  return <Modal title={initial ? 'Edit shared service' : 'Create shared service'} onClose={onClose}>
+    <form onSubmit={submit} className="grid gap-4">
+      <p className="text-sm leading-relaxed text-muted-foreground">One service plan is shared across its assigned clients. The expiry date is stored once and shown on every client account.</p>
+      <Field label="Service name" value={serviceName} onChange={setServiceName} placeholder="e.g. Home Connect" required minLength={2} />
+      <Field label="Shared expiry" value={endDate} onChange={setEndDate} type="date" required />
+      {initial && initial.assignedClientCount > 0 && <p className="rounded-xl bg-accent/60 p-3 text-sm text-muted-foreground">This plan is assigned to {initial.assignedClientCount} client{initial.assignedClientCount === 1 ? '' : 's'}. Changing the name or expiry updates all of them.</p>}
+      {error && <p role="alert" className="text-sm text-red-600">{error instanceof Error ? error.message : 'Unable to save this shared service.'}</p>}
+      <div className="mt-2 flex justify-end gap-2"><button type="button" onClick={onClose} className="btn-secondary">Cancel</button><button disabled={create.isPending || update.isPending} className="btn-primary">{create.isPending || update.isPending ? 'Saving…' : initial ? 'Save shared service' : 'Create service'}</button></div>
+    </form>
+  </Modal>;
 }
 
 function AdminServices() {
-  const query = useListAdminServices(); const clientsQuery = useListAdminClients(); const qc = useQueryClient(); const [filter, setFilter] = useState('all'); const [search, setSearch] = useState(''); const [open, setOpen] = useState(false);
-  const services = useMemo(() => (query.data || []).filter((s) => `${s.serviceName} ${s.clientName}`.toLowerCase().includes(search.toLowerCase())).filter((s) => filter === 'all' || s.status === filter), [query.data, search, filter]);
-  if (query.isLoading) return <PageLoader />; if (query.isError) return <ErrorState onRetry={() => query.refetch()} />;
-  return <PortalPage eyebrow="Operations" title="Services" copy="Track coverage, renewal windows, and every active provision." action={<button onClick={() => setOpen(true)} disabled={clientsQuery.isLoading || !clientsQuery.data?.length} className="btn-primary disabled:cursor-not-allowed disabled:opacity-50" data-testid="button-new-service"><Plus size={16} /> New service</button>}><div className="surface rounded-2xl p-4"><div className="flex flex-col gap-3 md:flex-row"><label className="relative flex-1"><Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" /><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search services or clients" className="input pl-10" data-testid="input-search-services" /></label><div className="flex gap-2 overflow-auto"><button onClick={() => setFilter('all')} className={`filter-button ${filter === 'all' ? 'filter-active' : ''}`} data-testid="button-service-filter-all">All</button><button onClick={() => setFilter('active')} className={`filter-button ${filter === 'active' ? 'filter-active' : ''}`} data-testid="button-service-filter-active">Active</button><button onClick={() => setFilter('expiring_soon')} className={`filter-button ${filter === 'expiring_soon' ? 'filter-active' : ''}`} data-testid="button-service-filter-expiring">Expiring</button><button onClick={() => setFilter('expired')} className={`filter-button ${filter === 'expired' ? 'filter-active' : ''}`} data-testid="button-service-filter-expired">Expired</button></div></div><div className="mt-4 grid gap-3 md:grid-cols-2">{services.map((service) => <ServiceCard key={service.id} service={service} admin onChange={() => { qc.invalidateQueries({ queryKey: getListAdminServicesQueryKey() }); qc.invalidateQueries({ queryKey: getGetAdminSummaryQueryKey() }); }} />)}</div>{services.length === 0 && <div className="mt-4"><EmptyState icon={BriefcaseBusiness} title="No services found" copy="Adjust the filters or add a new service." /></div>}</div>{open && <ServiceForm clientId="" clientName="" clients={clientsQuery.data || []} onClose={() => setOpen(false)} onDone={() => { setOpen(false); qc.invalidateQueries({ queryKey: getListAdminServicesQueryKey() }); qc.invalidateQueries({ queryKey: getGetAdminSummaryQueryKey() }); }} />}</PortalPage>;
+  const query = useListAdminServiceCatalog();
+  const clear = useClearAdminServiceAssignments();
+  const qc = useQueryClient();
+  const [filter, setFilter] = useState('all');
+  const [search, setSearch] = useState('');
+  const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState<AdminServicePlan | undefined>();
+  const plans = useMemo(() => (query.data || [])
+    .filter((plan) => plan.serviceName.toLowerCase().includes(search.toLowerCase()))
+    .filter((plan) => filter === 'all' || plan.status === filter), [query.data, search, filter]);
+  const assignmentCount = (query.data || []).reduce((total, plan) => total + plan.assignedClientCount, 0);
+  const refresh = () => {
+    qc.invalidateQueries({ queryKey: getListAdminServiceCatalogQueryKey() });
+    qc.invalidateQueries({ queryKey: getListAdminServicesQueryKey() });
+    qc.invalidateQueries({ queryKey: getListAdminClientsQueryKey() });
+    qc.invalidateQueries({ queryKey: getGetAdminSummaryQueryKey() });
+    qc.invalidateQueries({ predicate: (item) => item.queryKey.some((key) => typeof key === 'string' && key.startsWith('/api/admin/clients')) });
+  };
+  const clearAll = () => {
+    if (!assignmentCount) return;
+    const confirmed = window.confirm(`Clear all ${assignmentCount} client service assignment${assignmentCount === 1 ? '' : 's'}? Client profiles and shared service plans will remain. This cannot be undone.`);
+    if (confirmed) clear.mutate(undefined, { onSuccess: refresh });
+  };
+  if (query.isLoading) return <PageLoader />;
+  if (query.isError) return <ErrorState onRetry={() => query.refetch()} />;
+  return <PortalPage eyebrow="Operations" title="Services" copy="Create each service and expiry once, then assign clients to that shared plan." action={<div className="flex flex-wrap gap-2"><button onClick={clearAll} disabled={!assignmentCount || clear.isPending} className="btn-secondary text-red-700 disabled:cursor-not-allowed disabled:opacity-50" data-testid="button-clear-service-assignments"><Trash2 size={15} /> {clear.isPending ? 'Clearing…' : 'Clear all client services'}</button><button onClick={() => setOpen(true)} className="btn-primary" data-testid="button-new-service"><Plus size={16} /> New shared service</button></div>}>
+    <div className="surface rounded-2xl p-4">
+      <div className="mb-4 rounded-xl bg-accent/50 p-4 text-sm leading-relaxed text-muted-foreground">Each service name and expiry appears once here. Assign clients from their account or while registering them. Clearing assignments keeps client profiles and these shared service plans.</div>
+      <div className="flex flex-col gap-3 md:flex-row">
+        <label className="relative flex-1"><Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search shared services" className="input pl-10" data-testid="input-search-services" /></label>
+        <div className="flex gap-2 overflow-auto"><button onClick={() => setFilter('all')} className={`filter-button ${filter === 'all' ? 'filter-active' : ''}`} data-testid="button-service-filter-all">All</button><button onClick={() => setFilter('active')} className={`filter-button ${filter === 'active' ? 'filter-active' : ''}`} data-testid="button-service-filter-active">Active</button><button onClick={() => setFilter('expiring_soon')} className={`filter-button ${filter === 'expiring_soon' ? 'filter-active' : ''}`} data-testid="button-service-filter-expiring">Expiring</button><button onClick={() => setFilter('expired')} className={`filter-button ${filter === 'expired' ? 'filter-active' : ''}`} data-testid="button-service-filter-expired">Expired</button></div>
+      </div>
+      {plans.length > 0 ? <div className="mt-4 grid gap-3 md:grid-cols-2">
+        {plans.map((plan) => <article key={plan.id} className="rounded-xl border border-border bg-background p-4" data-testid={`card-shared-service-${plan.id}`}>
+          <div className="flex items-start gap-3"><span className={`service-mark ${plan.status === 'active' ? 'service-mark-green' : plan.status === 'expired' ? 'service-mark-red' : ''}`}><Server size={17} /></span><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h3 className="font-bold">{plan.serviceName}</h3><StatusPill status={plan.status} /></div><p className="mt-1 text-xs text-muted-foreground">Expires {formatDate(plan.endDate)}</p></div><button onClick={() => setEditing(plan)} className="icon-button" aria-label={`Edit ${plan.serviceName}`} data-testid={`button-edit-shared-service-${plan.id}`}><Pencil size={14} /></button></div>
+          <div className="mt-4 flex items-center justify-between border-t border-border pt-3"><span className="text-xs text-muted-foreground">Assigned clients</span><span className="mono text-sm font-bold">{plan.assignedClientCount}</span></div>
+        </article>)}
+      </div> : <div className="mt-4"><EmptyState icon={BriefcaseBusiness} title={query.data?.length ? 'No services found' : 'No shared services yet'} copy={query.data?.length ? 'Adjust the filters or search.' : 'Create a service plan before registering clients.'} action={!query.data?.length ? <button onClick={() => setOpen(true)} className="btn-primary"><Plus size={15} /> Create first service</button> : undefined} /></div>}
+      {clear.error && <p role="alert" className="mt-4 text-sm text-red-600">{clear.error instanceof Error ? clear.error.message : 'Unable to clear assignments.'}</p>}
+    </div>
+    {(open || editing) && <SharedServiceForm initial={editing} onClose={() => { setOpen(false); setEditing(undefined); }} onDone={() => { setOpen(false); setEditing(undefined); refresh(); }} />}
+  </PortalPage>;
 }
 
 function AdminUpdates() {

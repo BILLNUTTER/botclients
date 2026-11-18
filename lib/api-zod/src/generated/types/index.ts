@@ -6,8 +6,10 @@
  * OpenAPI spec version: 0.1.0
  */
 
+export * from './adminServicePlan';
 export * from './adminSummary';
 export * from './attentionItem';
+export * from './clearServiceAssignmentsResult';
 export * from './client';
 export * from './clientDetail';
 export * from './clientInput';
@@ -27,6 +29,8 @@ export * from './publicClientName';
 export * from './searchParameter';
 export * from './service';
 export * from './serviceInput';
+export * from './servicePlanInput';
+export * from './servicePlanUpdate';
 export * from './serviceStatus';
 export * from './serviceType';
 export * from './serviceTypeIdParameter';

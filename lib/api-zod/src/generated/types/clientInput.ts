@@ -11,9 +11,8 @@ export interface ClientInput {
   fullName: string;
   /** @minLength 5 */
   phone: string;
-  /** @minLength 2 */
-  serviceName: string;
+  /** @minLength 1 */
+  sharedServiceId: string;
   /** @minimum 0 */
   amountPaid: number;
-  serviceExpiry: Date;
 }

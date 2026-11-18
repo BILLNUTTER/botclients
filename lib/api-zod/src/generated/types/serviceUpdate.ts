@@ -7,16 +7,10 @@
  */
 
 export interface ServiceUpdate {
-  serviceTypeId?: string;
-  /** @minLength 2 */
-  serviceName?: string;
-  startDate?: Date;
-  endDate?: Date;
-  /**
-     * @minimum 0
-     * @nullable
-     */
-  price?: number | null;
+  /** @minLength 1 */
+  sharedServiceId?: string;
+  /** @minimum 0 */
+  price?: number;
   /** @nullable */
   notes?: string | null;
 }
